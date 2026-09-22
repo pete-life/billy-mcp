@@ -1,0 +1,37 @@
+{
+  "name": "billy-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "tsx --test test/*.test.ts",
+    "start": "node dist/launch.js",
+    "check": "npm run build && npm test",
+    "doctor": "tsx src/doctor.ts",
+    "setup": "tsx src/setup.ts",
+    "recover": "tsx src/recover.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  },
+  "license": "MIT",
+  "description": "Local MCP server for Billy accounting with receipt provenance, reviewed writes and bank reconciliation.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pete-life/billy-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/pete-life/billy-mcp/issues"
+  },
+  "homepage": "https://github.com/pete-life/billy-mcp#readme"
+}

@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.env*
+!.env.example
+data/
+*.sqlite*
+review-output.txt
+
+# Private profiles and local bookkeeping evidence
+acceptance/
+receipts/
+inbox/
+credentials.env
+bookkeeping-learning.md
+company-profiles/
+.DS_Store

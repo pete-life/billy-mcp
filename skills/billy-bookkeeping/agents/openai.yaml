@@ -1,0 +1,6 @@
+interface:
+  display_name: "Billy bookkeeping"
+  short_description: "Receipts, reviewed bookkeeping and bank reconciliation"
+  default_prompt: "Use $billy-bookkeeping for the agreed invoices and report completed items and exceptions."
+policy:
+  allow_implicit_invocation: true
