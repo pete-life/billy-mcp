@@ -7,6 +7,8 @@ import {Store} from './store.js';
 import {Engine} from './engine.js';
 import {Reports} from './reports.js';
 import {presentGet,presentList,presentOverview,presentPlan,presentStatus,compactRecord,safeValue} from './presentation.js';
+import {ApprovalGate} from './approval.js';
+import {BatchManager,purchaseBatch} from './batches.js';
 import {date,identifier,operation,receiptMetadata,sanitizeSource,source} from './schemas.js';
 import type {Config} from './config.js';
 
@@ -24,6 +26,8 @@ export function createServer(config:Config,client=new BillyClient(config.token,c
   const server=new McpServer({name:'billy-mcp',version:'0.1.1'});
   const engine=new Engine(client,store,config);
   const reports=new Reports(client);
+  const approvalGate=new ApprovalGate(config,server);
+  const batches=new BatchManager(client,engine,store,approvalGate);
   function tool(name:string,description:string,schema:any,mutates:boolean,handler:(args:any)=>Promise<any>|any) {
     server.registerTool(name,{description,inputSchema:schema,annotations:{readOnlyHint:!mutates,destructiveHint:mutates,idempotentHint:!mutates,openWorldHint:true}},async(args:any)=>{
       try{
@@ -86,9 +90,23 @@ export function createServer(config:Config,client=new BillyClient(config.token,c
   },true,({operation:op,reason})=>engine.prepare(op,reason));
   tool('billy_plan','Inspect a saved proposal and its execution evidence. Default output retains operation, hash and snapshot hashes.',{planId:z.uuid(),verbose:z.boolean().default(false)},false,({planId,verbose})=>presentPlan(store.plan(planId),verbose));
   tool('billy_refresh_plan','Refresh an unexecuted/rejected proposal after changed data or expiry; review it again before execution.',{planId:z.uuid()},true,({planId})=>engine.refresh(planId));
-  tool('billy_execute','Execute the exact reviewed proposal once. Requires authorization for this operation/batch and locally enabled writes. A supplied authorization note is an audit assertion, not proof of user consent. Unknown outcomes block further writes; never work around them.',{
+  tool('billy_execute','Execute the exact reviewed proposal once. Default approval uses the MCP client form; a supplied authorization note is only an audit assertion. Unknown outcomes block further writes.',{
     planId:z.uuid(),expectedHash:z.string().regex(/^[a-f0-9]{64}$/),authorization:z.string().min(10).max(1000),
-  },true,async({planId,expectedHash,authorization})=>{store.event(planId,`authorization: ${authorization}`);return engine.execute(planId,expectedHash);});
+  },true,async({planId,expectedHash,authorization})=>{
+    const plan=store.plan(planId);
+    if(plan.hash!==expectedHash)throw new Error('Plan hash mismatch');
+    if(plan.status==='completed')return plan;
+    await approvalGate.authorize({companyId:config.organizationId,hash:expectedHash,details:{operation:plan.operation,reason:plan.reason},authorization});
+    store.event(planId,`authorization: ${authorization}`);
+    return engine.execute(planId,expectedHash);
+  });
+  tool('billy_batch_prepare','Preflight and save an ordered purchase batch (1-10 cases). Each case binds an original receipt, exact draft lines and explicit approval/payment/reconciliation stages. No Billy writes.',
+    {cases:purchaseBatch.shape.cases,reason:purchaseBatch.shape.reason},true,args=>batches.prepare(args));
+  tool('billy_batch_get','Inspect saved batch, child plan IDs, partial progress and stop reason.',{batchId:z.uuid()},false,({batchId})=>batches.get(batchId));
+  tool('billy_batch_refresh','Refresh initial evidence for a batch before any stage starts; clears prior client approval.',{batchId:z.uuid()},true,({batchId})=>batches.refresh(batchId));
+  tool('billy_batch_execute','Approve the complete ordered company batch once and execute its stages sequentially through guarded plans. A stop returns explicit partial progress. Resume the same hash after inspecting the cause.',
+    {batchId:z.uuid(),expectedHash:z.string().regex(/^[a-f0-9]{64}$/),authorization:z.string().min(10).max(1000)},true,
+    ({batchId,expectedHash,authorization})=>batches.execute(batchId,expectedHash,authorization));
   tool('billy_journal','Read the last 200 proposals, including rejected/uncertain writes. An unknown outcome requires reconciliation against live Billy records before recovery.',{verbose:z.boolean().default(false)},false,({verbose})=>{
     const plans=store.plans();return {count:plans.length,limit:200,completeWithinLimit:plans.length<200,plans:plans.map(p=>presentPlan(p,verbose))};
   });
