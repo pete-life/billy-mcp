@@ -44,8 +44,8 @@ export class BatchManager {
     const amount=expected.lines.reduce((total,l)=>total+cents(l.amount),0);
     if(amount!==cents(expected.taxMode==='incl'?metadata.totalAmount:metadata.netAmount)||cents(metadata.netAmount)+cents(metadata.vatAmount)!==cents(metadata.totalAmount))throw new Error('Purchase lines do not match receipt net/VAT/gross evidence');
     const records:Snapshot['records']=[];
-    const get=async(resource:'contacts'|'accounts'|'taxRates'|'bankLines'|'bankLineMatches',id:string)=>{
-      const record=await this.client.get(resource,id);records.push({resource,id,hash:digest(materialRecord(resource,record))});return record;
+    const get=async(resource:'contacts'|'accounts'|'taxRates'|'bankLines'|'bankLineMatches',id:string,include?:string)=>{
+      const record=await this.client.get(resource,id,include);records.push({resource,id,hash:digest(materialRecord(resource,record))});return record;
     };
     const contact=await get('contacts',expected.contactId);
     if(!contact.isSupplier)throw new Error('Selected contact is not a supplier');
@@ -62,7 +62,7 @@ export class BatchManager {
       const bank=await get('bankLines',item.payment.bankLineId);
       if(bank.isReconciled||bank.accountId!==item.payment.cashAccountId||bank.entryDate!==item.payment.entryDate||bank.side!==item.payment.cashSide||cents(Number(bank.amount))!==cents(item.payment.cashAmount))throw new Error('Payment does not match the exact unreconciled bank line');
       if(!bank.matchId)throw new Error('Payment bank line has no match');
-      const match=await get('bankLineMatches',bank.matchId);
+      const match=await get('bankLineMatches',bank.matchId,'bankLineMatch.lines:embed,bankLineMatch.subjectAssociations:embed');
       if(match.isApproved!==false||!Array.isArray(match.lines)||match.lines.length!==1||match.lines[0].id!==bank.id||!Array.isArray(match.subjectAssociations)||match.subjectAssociations.length)throw new Error('Payment requires an inspectable, unapproved single-line bank match without associations');
     }
     if(checkDuplicate){
@@ -140,15 +140,20 @@ export class BatchManager {
       for(let i=0;i<spec.cases.length;i++){
         if(this.store.batch(batchId).stages[`${i}:final`])continue;
         const item=spec.cases[i]!,reason=`Batch ${batchId} case ${i+1}: ${spec.reason}`;
+        await this.verifyPending(this.store.batch(batchId));
         const receipt=this.store.receipt(item.receiptId);
         if(!receipt.attachmentId||this.store.batch(batchId).stages[`${i}:upload`])await this.stage(lease,`${i}:upload`,{kind:'upload_receipt',receiptId:item.receiptId},reason);
+        await this.verifyPending(this.store.batch(batchId));
         const billPlan=await this.stage(lease,`${i}:bill`,{kind:'create_bill',receiptId:item.receiptId,...item.bill},reason);
         const billId=billPlan.result?.id;
         if(typeof billId!=='string')throw new Error('Completed bill stage has no verified bill ID');
+        await this.verifyPending(this.store.batch(batchId));
         if(item.approve)await this.stage(lease,`${i}:approve`,{kind:'approve',resource:'bills',id:billId},reason);
         if(item.payment){
+          await this.verifyPending(this.store.batch(batchId));
           const paymentPlan=await this.stage(lease,`${i}:payment`,{kind:'create_payment',...item.payment,subjectReference:`bill:${billId}`},reason);
           if(item.reconcile){
+            await this.verifyPending(this.store.batch(batchId));
             const resolver=this.engine as Engine & {resolvePaymentCashPosting(planId:string):Promise<{postingId:string;paymentId:string;bankLineId:string}>};
             const {postingId,bankLineId}=await resolver.resolvePaymentCashPosting(paymentPlan.id);
             if(bankLineId!==item.payment.bankLineId)throw new Error('Payment posting resolver returned a different bank line');
