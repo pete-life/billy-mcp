@@ -203,7 +203,11 @@ test('supplier credit note requires original bill and uploaded credit evidence, 
     const done=await f.engine.execute(plan.id,plan.hash);
     assert.equal(done.result.type,'creditNote');assert.equal(done.result.creditedBillId,'original');
     assert.equal(f.records.attachments['credit-attachment'].ownerReference,`bill:${done.result.id}`);
-    await assert.rejects(f.engine.prepare({...op,entryDate:'2026-09-03'},'Duplicate credit document'),/date|already exists|Duplicate|number/);
+    const secondFile=join(f.store.inbox,'duplicate-credit.pdf');writeFileSync(secondFile,'%PDF-1.4\nsecond synthetic copy\n%%EOF');
+    const second=f.store.importReceipt(secondFile,{kind:'local',reference:'duplicate-fixture'},receipt.metadata);
+    second.attachmentId='second-attachment';f.store.saveReceipt(second);
+    f.records.attachments['second-attachment']={id:'second-attachment',fileId:'second-file'};
+    await assert.rejects(f.engine.prepare({...op,receiptId:second.id},'Duplicate credit document'),/number already exists/);
   }finally{f.store.close();}
   const g=fixture(),secondReceipt=g.supplierCreditReceipt();
   g.records.contacts.supplier={id:'supplier',name:'Supplier Ltd',isSupplier:true};g.records.accounts.expense={id:'expense',isArchived:false};
