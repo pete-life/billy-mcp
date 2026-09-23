@@ -51,6 +51,12 @@ function verifyInvoice(actual:RecordData,op:{expectedNetAmount:number;expectedTa
     }
   }
 }
+function immutableInvoiceLines(record:RecordData) {
+  if(!Array.isArray(record.lines)||!record.lines.length||record.lines.some((line:RecordData)=>typeof line?.id!=='string'))throw new Error('Invoice lines are not inspectable');
+  return record.lines.map((line:RecordData)=>({id:line.id,productId:line.productId,description:line.description,
+    quantity:line.quantity,unitPrice:line.unitPrice,taxRateId:line.taxRateId,discountText:line.discountText,
+    discountMode:line.discountMode,discountValue:line.discountValue,priority:line.priority})).sort((a:RecordData,b:RecordData)=>a.id.localeCompare(b.id));
+}
 function verifyLines(actual:RecordData, expected:RecordData[]) {
   if(!Array.isArray(actual.lines)||actual.lines.length!==expected.length)throw new Error('Read-back lines are missing or changed');
   const remaining=[...actual.lines];
@@ -58,6 +64,71 @@ function verifyLines(actual:RecordData, expected:RecordData[]) {
     const index=remaining.findIndex(candidate=>Object.entries(line).every(([key,value])=>key==='amount'?Number.isFinite(Number(candidate[key]))&&cents(Number(candidate[key]))===cents(value):candidate[key]===value));
     if(index<0)throw new Error('Read-back line account, amount, direction, tax or text differs');remaining.splice(index,1);
   }
+}
+function verifyBillLines(actual:RecordData,expected:RecordData[],taxMode:'incl'|'excl') {
+  if(!Array.isArray(actual.lines)||actual.lines.length!==expected.length)throw new Error('Bill read-back lines are missing or changed');
+  const remaining=[...actual.lines];
+  for(const wanted of expected){
+    const index=remaining.findIndex(line=>line.accountId===wanted.accountId&&line.taxRateId===wanted.taxRateId&&line.description===wanted.description&&
+      Number.isFinite(Number(line.amount))&&Number.isFinite(Number(line.tax))&&
+      (taxMode==='incl'?cents(Number(line.amount))+cents(Number(line.tax))===cents(wanted.amount):cents(Number(line.amount))===cents(wanted.amount)));
+    if(index<0)throw new Error('Bill read-back account, tax, description or line amount differs');
+    remaining.splice(index,1);
+  }
+}
+function approvedIdentity(record:RecordData,resource:Resource) {
+  const fields=resource==='invoices'?['id','type','contactId','currencyId','entryDate','taxMode','amount','tax','creditedInvoiceId']:
+    resource==='bills'?['id','type','contactId','currencyId','entryDate','taxMode','amount','tax','suppliersInvoiceNo','creditedBillId']:
+    ['id','daybookId','entryDate','description'];
+  const lineFields=resource==='invoices'?['id','productId','description','quantity','unitPrice','amount','tax','taxRateId','discountText','discountMode','discountValue','priority']:
+    resource==='bills'?['id','accountId','taxRateId','description','amount','tax','priority']:
+    ['id','text','accountId','taxRateId','amount','side','currencyId','priority'];
+  if(!Array.isArray(record.lines)||!record.lines.length)throw new Error('Approval lines are not inspectable');
+  return {header:Object.fromEntries(fields.map(key=>[key,record[key]])),
+    lines:record.lines.map((line:RecordData)=>Object.fromEntries(lineFields.map(key=>[key,line[key]])))
+      .sort((a:RecordData,b:RecordData)=>String(a.id??'').localeCompare(String(b.id??'')))};
+}
+function validateCustomerCreditPortfolio(original:RecordData,credits:RecordData[]) {
+  if(original.state!=='approved'||original.type!=='invoice'||!Array.isArray(original.lines)||!Number.isFinite(Number(original.amount))||!Number.isFinite(Number(original.tax)))throw new Error('Original customer invoice is not inspectable for credit approval');
+  let net=0,tax=0;
+  const quantity=new Map<string,number>(),gross=new Map<string,number>();
+  for(const credit of credits){
+    if(credit.type!=='creditNote'||credit.contactId!==original.contactId||currencyOf(credit)!==currencyOf(original)||!Array.isArray(credit.lines)||
+      !Number.isFinite(Number(credit.amount))||!Number.isFinite(Number(credit.tax)))throw new Error('Linked customer credit is not inspectable');
+    net+=cents(Number(credit.amount));tax+=cents(Number(credit.tax));
+        for(const line of credit.lines){
+          const source=original.lines.find((candidate:RecordData)=>candidate.productId===line.productId);
+          if(!source||original.lines.filter((candidate:RecordData)=>candidate.productId===line.productId).length!==1||line.taxRateId!==source.taxRateId||
+        typeof source.id!=='string'||!Number.isFinite(Number(source.quantity))||!Number.isFinite(Number(source.unitPrice))||
+        !Number.isFinite(Number(source.amount))||!Number.isFinite(Number(source.tax))||
+        !Number.isFinite(Number(line.quantity))||Number(line.quantity)<=0||!Number.isFinite(Number(line.unitPrice))||
+        !Number.isFinite(Number(line.amount))||!Number.isFinite(Number(line.tax))||cents(Number(line.unitPrice))>cents(Number(source.unitPrice)))
+        throw new Error('Linked customer credit line differs from original product, quantity, price or tax');
+      quantity.set(source.id,(quantity.get(source.id)??0)+Number(line.quantity));
+      gross.set(source.id,(gross.get(source.id)??0)+cents(Number(line.amount))+cents(Number(line.tax)));
+      if((quantity.get(source.id)??0)>Number(source.quantity)+0.000001||(gross.get(source.id)??0)>cents(Number(source.amount))+cents(Number(source.tax)))throw new Error('Linked customer credits exceed original line quantity or gross');
+    }
+  }
+  if(net>cents(Number(original.amount))||tax>cents(Number(original.tax)))throw new Error('Linked customer credits exceed original invoice net or VAT');
+}
+function validateSupplierCreditPortfolio(original:RecordData,credits:RecordData[]) {
+  if(original.state!=='approved'||original.type!=='bill'||!Array.isArray(original.lines)||!Number.isFinite(Number(original.amount))||!Number.isFinite(Number(original.tax)))throw new Error('Original supplier bill is not inspectable for credit approval');
+  let net=0,tax=0;
+  const gross=new Map<string,number>();
+  for(const credit of credits){
+    if(credit.type!=='creditNote'||credit.contactId!==original.contactId||currencyOf(credit)!==currencyOf(original)||credit.taxMode!==original.taxMode||
+      !Array.isArray(credit.lines)||!Number.isFinite(Number(credit.amount))||!Number.isFinite(Number(credit.tax)))throw new Error('Linked supplier credit is not inspectable');
+    net+=cents(Number(credit.amount));tax+=cents(Number(credit.tax));
+    for(const line of credit.lines){
+      const source=original.lines.find((candidate:RecordData)=>candidate.accountId===line.accountId&&candidate.taxRateId===line.taxRateId);
+      if(!source||typeof source.id!=='string'||!Number.isFinite(Number(source.amount))||!Number.isFinite(Number(source.tax))||
+        original.lines.filter((candidate:RecordData)=>candidate.accountId===line.accountId&&candidate.taxRateId===line.taxRateId).length!==1||
+        !Number.isFinite(Number(line.amount))||!Number.isFinite(Number(line.tax)))throw new Error('Linked supplier credit account or tax differs from original');
+      gross.set(source.id,(gross.get(source.id)??0)+cents(Number(line.amount))+cents(Number(line.tax)));
+      if((gross.get(source.id)??0)>cents(Number(source.amount))+cents(Number(source.tax)))throw new Error('Linked supplier credits exceed original bill line');
+    }
+  }
+  if(net>cents(Number(original.amount))||tax>cents(Number(original.tax)))throw new Error('Linked supplier credits exceed original bill net or VAT');
 }
 function subject(ref:string): {resource:Resource; id:string} {
   const [kind, recordId]=ref.split(':');
@@ -144,6 +215,8 @@ export class Engine {
           const source=original.lines.find((candidate:RecordData)=>candidate.id===line.originalLineId);
           if(!source||source.productId!==line.productId||source.taxRateId!==line.expectedTaxRateId||seen.has(line.originalLineId))throw new Error('Credit line must identify one distinct original product and sales tax line');
           if(!Number.isFinite(Number(source.amount))||!Number.isFinite(Number(source.tax)))throw new Error('Original invoice line amount or tax is unavailable');
+          if(!Number.isFinite(Number(source.quantity))||Number(source.quantity)<=0||!Number.isFinite(Number(source.unitPrice))||Number(source.unitPrice)<0)throw new Error('Original invoice line quantity or unit price is unavailable');
+          if(line.quantity>Number(source.quantity)+0.000001||cents(line.unitPrice)>cents(Number(source.unitPrice)))throw new Error('Credit quantity or unit price exceeds the original invoice line');
           seen.add(line.originalLineId);
           if(original.lines.filter((candidate:RecordData)=>candidate.productId===line.productId).length!==1)throw new Error('Original repeats a product; credit allocation is ambiguous');
           const product=await get('products',line.productId);
@@ -154,8 +227,11 @@ export class Engine {
           const previous=prior.flatMap(credit=>Array.isArray(credit.lines)?credit.lines:[]).filter((candidate:RecordData)=>candidate.productId===line.productId);
           if(prior.some(credit=>!Array.isArray(credit.lines)||credit.type!=='creditNote'||credit.contactId!==original.contactId||currencyOf(credit)!==currencyOf(original)||
             !Number.isFinite(Number(credit.amount))||!Number.isFinite(Number(credit.tax))||credit.lines.some((candidate:RecordData)=>!Number.isFinite(Number(candidate.amount))||!Number.isFinite(Number(candidate.tax)))))throw new Error('Existing linked credits are not inspectable or differ from original');
-          if(cents(line.quantity*line.unitPrice)+previous.reduce((n:number,candidate:RecordData)=>n+cents(candidate.amount)+(original.taxMode==='incl'?cents(candidate.tax):0),0)>cents(source.amount)+(original.taxMode==='incl'?cents(source.tax):0))throw new Error('Credit exceeds the original invoice line');
+          if(previous.some((candidate:RecordData)=>candidate.taxRateId!==source.taxRateId||!Number.isFinite(Number(candidate.quantity))||Number(candidate.quantity)<=0||
+            !Number.isFinite(Number(candidate.unitPrice))||Number(candidate.unitPrice)<0||cents(Number(candidate.unitPrice))>cents(Number(source.unitPrice))))throw new Error('Existing credit quantity, unit price or sales tax is not consistent with original');
           if(previous.some((candidate:RecordData)=>close(candidate.quantity,line.quantity)&&cents(candidate.unitPrice)===cents(line.unitPrice)))throw new Error('Duplicate customer credit line already exists');
+          if(previous.reduce((n:number,candidate:RecordData)=>n+Number(candidate.quantity),0)+line.quantity>Number(source.quantity)+0.000001)throw new Error('Cumulative credited quantity exceeds original invoice line');
+          if(cents(line.quantity*line.unitPrice)+previous.reduce((n:number,candidate:RecordData)=>n+cents(candidate.amount)+(original.taxMode==='incl'?cents(candidate.tax):0),0)>cents(source.amount)+(original.taxMode==='incl'?cents(source.tax):0))throw new Error('Credit exceeds the original invoice line');
         }
         const priorNet=prior.reduce((n,credit)=>n+cents(credit.amount),0),priorTax=prior.reduce((n,credit)=>n+cents(credit.tax),0);
         if(priorNet+cents(op.expectedNetAmount)>cents(original.amount)||priorTax+cents(op.expectedTaxAmount)>cents(original.tax))throw new Error('Credit would exceed original net amount or VAT');
@@ -197,7 +273,9 @@ export class Engine {
           const tax=await get('taxRates',line.taxRateId);
           if(tax.isActive===false||tax.appliesToPurchases===false)throw new Error('Supplier credit tax rate is inactive or not for purchases');
           const previous=priorDetails.flatMap(credit=>credit.lines).filter((candidate:RecordData)=>candidate.accountId===line.accountId&&candidate.taxRateId===line.taxRateId);
-          if(cents(line.amount)+previous.reduce((n:number,candidate:RecordData)=>n+cents(candidate.amount),0)>cents(source.amount))throw new Error('Supplier credit exceeds original bill line');
+          const sourceLimit=cents(Number(source.amount))+(original.taxMode==='incl'?cents(Number(source.tax)):0);
+          const previousApplied=previous.reduce((n:number,candidate:RecordData)=>n+cents(candidate.amount)+(original.taxMode==='incl'?cents(candidate.tax):0),0);
+          if(cents(line.amount)+previousApplied>sourceLimit)throw new Error('Supplier credit exceeds original bill line');
           if(previous.some((candidate:RecordData)=>cents(candidate.amount)===cents(line.amount)&&normalize(candidate.description)===normalize(line.description)))throw new Error('Duplicate supplier credit line already exists');
         }
         if(entered!==cents(original.taxMode==='incl'?op.expectedTotalAmount:op.expectedNetAmount))throw new Error('Supplier credit lines do not match uploaded document totals');
@@ -230,7 +308,31 @@ export class Engine {
           if(!attachments.length)throw new Error('Bill has no attached supporting document');
           for(const a of attachments)await get('attachments',a.id);
           for(const r of this.store.receipts().filter(r=>attachments.some(a=>a.id===r.attachmentId)))verifyBill(record,r.metadata);
-        }break;
+          if(record.type==='creditNote'){
+            if(!record.creditedBillId)throw new Error('Supplier credit draft is not linked to an original bill');
+            const original=await get('bills',record.creditedBillId,'bill.lines:embed');
+            const relevant=this.store.receipts().filter(r=>attachments.some(a=>a.id===r.attachmentId)&&r.metadata.documentType==='creditNote'&&
+              r.metadata.creditedInvoiceNumber===original.suppliersInvoiceNo);
+            if(!relevant.length)throw new Error('Supplier credit approval requires its uploaded original credit document');
+            const contact=await get('contacts',original.contactId);
+            if(!contact.isSupplier||relevant.some(r=>!supplierMatches(contact,r.metadata)))throw new Error('Supplier credit evidence differs from original supplier identity');
+            const listed=(await this.client.list('bills',{creditedBillId:record.creditedBillId})).filter(b=>b.creditedBillId===record.creditedBillId&&b.state!=='voided');
+            if(!listed.some(b=>b.id===op.id))throw new Error('Supplier credit draft is absent from linked credit inventory');
+            const credits=[] as RecordData[];
+            for(const item of listed)credits.push(await get('bills',item.id,'bill.lines:embed'));
+            validateSupplierCreditPortfolio(original,credits);
+          }
+        }
+        if(op.resource==='invoices'&&record.type==='creditNote'){
+          if(!record.creditedInvoiceId)throw new Error('Customer credit draft is not linked to an original invoice');
+          const original=await get('invoices',record.creditedInvoiceId,'invoice.lines:embed');
+          const listed=(await this.client.list('invoices',{creditedInvoiceId:record.creditedInvoiceId})).filter(i=>i.creditedInvoiceId===record.creditedInvoiceId&&i.state!=='voided');
+          if(!listed.some(i=>i.id===op.id))throw new Error('Customer credit draft is absent from linked credit inventory');
+          const credits=[] as RecordData[];
+          for(const item of listed)credits.push(await get('invoices',item.id,'invoice.lines:embed'));
+          validateCustomerCreditPortfolio(original,credits);
+        }
+        break;
       }
       case 'create_payment': {
         const a=await account(op.cashAccountId);if(!a.isPaymentEnabled)throw new Error('Account is not enabled for payments');
@@ -380,6 +482,7 @@ export class Engine {
           const response=await write('bills',{...payload,state:'draft',attachmentIds:[{id:r.attachmentId}]});
           result=await verify('bills',response,{state:'draft',contactId:op.contactId,suppliersInvoiceNo:op.suppliersInvoiceNo,currencyId:op.currencyId});
           verifyBill(result,r.metadata);
+          verifyBillLines(result,op.lines,op.taxMode);
           const attachments=await this.client.list('attachments',{ownerReference:`bill:${result.id}`});
           if(!attachments.some(a=>a.id===r.attachmentId))throw new Error('Receipt was not attached to bill');
           break;
@@ -388,14 +491,18 @@ export class Engine {
           const lines=op.lines.map(({salesTaxRulesetId,expectedTaxRateId,...line})=>line);
           const response=await write('invoices',{contactId:op.contactId,entryDate:op.entryDate,currencyId:op.currencyId,taxMode:op.taxMode,
             contactMessage:op.contactMessage,lines,state:'draft'});
-          const invoice=await verify('invoices',response,{state:'draft',contactId:op.contactId,entryDate:op.entryDate,currencyId:op.currencyId,taxMode:op.taxMode});
+          const invoice=await verify('invoices',response,{state:'draft',contactId:op.contactId,entryDate:op.entryDate,currencyId:op.currencyId,taxMode:op.taxMode,
+            ...(op.contactMessage!==undefined?{contactMessage:op.contactMessage}:{})});
           if(invoice.type!=='invoice')throw new Error('Created sales invoice has an unexpected type');
           verifyInvoice(invoice,op);result=invoice;break;
         }
         case 'update_draft_invoice': {
           const {kind,id,expectedNetAmount,expectedTaxAmount,expectedTotalAmount,...patch}=op;
+          const reviewed=snapshots.find(snapshot=>snapshot.resource==='invoices'&&snapshot.id===id)?.record;
+          if(!reviewed)throw new Error('Reviewed draft invoice snapshot is missing');
           const invoice=await verify('invoices',await write('invoices',patch,id),{state:'draft',...patch});
           if(invoice.type!=='invoice')throw new Error('Updated record has an unexpected invoice type');
+          if(digest(immutableInvoiceLines(invoice))!==digest(immutableInvoiceLines(reviewed)))throw new Error('Draft invoice read-back changed immutable lines');
           verifyInvoice(invoice,op);result=invoice;break;
         }
         case 'send_invoice': {
@@ -428,7 +535,7 @@ export class Engine {
           const credit=await verify('bills',response,{type:'creditNote',creditedBillId:op.originalBillId,contactId:original.contactId,
             entryDate:op.entryDate,suppliersInvoiceNo:receipt.metadata.invoiceNumber,currencyId:currencyOf(original),taxMode:original.taxMode,state:'draft'});
           verifyBill(credit,receipt.metadata);
-          verifyLines(credit,lines);
+          verifyBillLines(credit,lines,original.taxMode);
           const attachments=await this.client.list('attachments',{ownerReference:`bill:${credit.id}`});
           if(!attachments.some(a=>a.id===receipt.attachmentId))throw new Error('Supplier credit document attachment was not confirmed');
           result=credit;break;
@@ -440,10 +547,23 @@ export class Engine {
           if(receiptId){const attachments=await this.client.list('attachments',{ownerReference:`daybookTransaction:${result.id}`});if(!attachments.some(a=>a.id===this.store.receipt(receiptId).attachmentId))throw new Error('Journal receipt link not confirmed');}
           break;
         }
-        case 'approve': result=await verify(op.resource,await write(op.resource,{state:'approved'},op.id),{state:'approved'});break;
+        case 'approve': {
+          const reviewed=snapshots.find(snapshot=>snapshot.resource===op.resource&&snapshot.id===op.id)?.record;
+          if(!reviewed)throw new Error('Approved draft snapshot is missing');
+          const approved=await verify(op.resource,await write(op.resource,{state:'approved'},op.id),{state:'approved'});
+          if(digest(approvedIdentity(approved,op.resource))!==digest(approvedIdentity(reviewed,op.resource)))throw new Error('Approval read-back changed reviewed lines or financial identity');
+          if(op.resource==='bills'){
+            const expected=snapshots.filter(snapshot=>snapshot.resource==='attachments').map(snapshot=>snapshot.id).sort();
+            const actual=(await this.client.list('attachments',{ownerReference:`bill:${op.id}`})).map(attachment=>attachment.id).sort();
+            if(digest(actual)!==digest(expected))throw new Error('Approval read-back changed supporting attachments');
+          }
+          result=approved;break;
+        }
         case 'create_payment': {
           const {kind,subjectReference,bankLineId,subjectAmount,subjectCurrencyId,...payload}=op;
           const ref=subject(subjectReference),before=await this.client.get(ref.resource,ref.id,subjectInclude(ref.resource));
+          const reviewed=snapshots.find(snapshot=>snapshot.resource===ref.resource&&snapshot.id===ref.id);
+          if(!reviewed||digest(before)!==reviewed.hash)throw new Error('Payment subject changed since the reviewed snapshot; no payment sent');
           const response=await write('bankPayments',{...payload,associations:[{subjectReference}]});
           const payment=await verify('bankPayments',response,{cashAmount:op.cashAmount,cashSide:op.cashSide,cashAccountId:op.cashAccountId});
           const paymentRead=await this.client.get('bankPayments',payment.id,'bankPayment.associations:embed');

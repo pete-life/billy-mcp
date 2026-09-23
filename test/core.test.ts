@@ -44,12 +44,18 @@ function fixture(){
     const single=resources[resource as Resource],payload=body[single];
     const record={...(key?records[resource!][key]:{}),...payload,id:key||`${resource}-new`};
     if(resource==='bills'&&payload.lines){
-      const total=payload.lines.reduce((sum:any,l:any)=>sum+l.amount,0);
-      const rate=records.taxRates[payload.lines[0].taxRateId].rate;
-      record.amount=payload.taxMode==='incl'?total/(1+rate):total;record.tax=record.amount*rate;
+      record.lines=payload.lines.map((line:any,index:number)=>{
+        const rate=records.taxRates[line.taxRateId].rate;
+        const amount=payload.taxMode==='incl'?line.amount/(1+rate):line.amount;
+        return {...line,id:`bill-line-${index}`,amount,tax:amount*rate};
+      });
+      record.amount=record.lines.reduce((sum:number,line:any)=>sum+line.amount,0);
+      record.tax=record.lines.reduce((sum:number,line:any)=>sum+line.tax,0);
+      if(failure==='alter:bill-account')record.lines[0].accountId='diverted';
     }
     records[resource!][record.id]=record;
     if(resource==='daybookTransactions'&&failure==='alter:journal')record.lines=[];
+    if(resource==='daybookTransactions'&&payload.state==='approved'&&failure==='alter:approve-lines')record.lines[0].accountId='diverted';
     if(resource==='bills'&&payload.attachmentIds)records.attachments[payload.attachmentIds[0].id].ownerReference=`bill:${record.id}`;
     if(resource==='bankPayments'){
       const [type,id]=payload.associations[0].subjectReference.split(':');
@@ -287,6 +293,20 @@ test('wrong VAT on a created draft fails verification and blocks approval',async
   await assert.rejects(f.engine.execute(plan.id,plan.hash),/supporting document/);
   assert.equal(f.store.plan(plan.id).status,'unknown');assert.equal(f.records.bills['bills-new'].state,'draft');
   await assert.rejects(f.engine.prepare({kind:'approve',resource:'bills',id:'bills-new'},'Try to approve wrong VAT'),/supporting document/);f.store.close();
+});
+test('bill creation rejects a diverted account with unchanged totals',async()=>{
+  const f=fixture(),r=f.receipt();r.attachmentId='attachment';f.store.saveReceipt(r);f.records.attachments.attachment={id:'attachment'};
+  const op={kind:'create_bill',receiptId:r.id,contactId:'supplier',entryDate:'2026-09-01',currencyId:'DKK',suppliersInvoiceNo:'INV-1',taxMode:'incl',
+    lines:[{accountId:'expense',taxRateId:'vat',description:'Hosting',amount:125}]};
+  const plan=await f.engine.prepare(op,'Verify exact bill account');f.fail('alter:bill-account');
+  await assert.rejects(f.engine.execute(plan.id,plan.hash),/account/);
+  assert.equal(f.store.plan(plan.id).status,'unknown');f.store.close();
+});
+test('approval rejects a changed line after a successful state update',async()=>{
+  const f=fixture();f.records.daybookTransactions.journal={id:'journal',state:'draft',entryDate:'2026-09-01',lines:[{id:'line',accountId:'expense',amount:100,side:'debit',currencyId:'DKK'}]};
+  const plan=await f.engine.prepare({kind:'approve',resource:'daybookTransactions',id:'journal'},'Approve reviewed journal');
+  f.fail('alter:approve-lines');await assert.rejects(f.engine.execute(plan.id,plan.hash),/financial identity/);
+  assert.equal(f.store.plan(plan.id).status,'unknown');f.store.close();
 });
 test('equal instalments are distinct by bank line and cannot be silently replayed',async()=>{
   const f=fixture();f.records.bills.bill={id:'bill',state:'approved',balance:250,currencyId:'DKK'};

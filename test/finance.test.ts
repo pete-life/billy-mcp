@@ -23,7 +23,7 @@ function fixture(){
     bankLineMatches:{match:{id:'match',isApproved:false,lines:[{id:'line'}],subjectAssociations:[]}},transactions:{},postings:{},
   };
   const calls:{method:string;path:string;body:any}[]=[];
-  let failure='';
+  let failure='',paymentSubjectGets=0;
   const fetcher:typeof fetch=async(input,init)=>{
     const url=new URL(String(input)),path=url.pathname.replace('/v2/',''),[resource,key,action]=path.split('/');
     const method=init?.method||'GET',body=typeof init?.body==='string'?JSON.parse(init.body):undefined;
@@ -31,6 +31,7 @@ function fixture(){
     if(failure===`transport:${method}:${path}`)throw new Error('simulated transport loss');
     if(path==='organization')return Response.json({organization:{id:'fixture-org',baseCurrencyId:'DKK',defaultBankFeeAccountId:'fee'}});
     if(method==='GET'){
+      if(failure==='drift:payment-subject'&&key==='invoice'&&resource==='invoices'&&++paymentSubjectGets===2)records.invoices.invoice.balance=50;
       if(key)return Response.json({[resources[resource as Resource]]:records[resource]?.[key]});
       let values=Object.values(records[resource]||{});
       if(url.searchParams.has('creditedInvoiceId'))values=values.filter(v=>v.creditedInvoiceId===url.searchParams.get('creditedInvoiceId'));
@@ -45,6 +46,8 @@ function fixture(){
       return Response.json({accepted:true});
     }
     const payload=body[resources[resource as Resource]],record={...(key?records[resource]?.[key]:{}),...payload,id:key||`${resource}-${Object.keys(records[resource]||{}).length+1}`};
+    if(resource==='invoices'&&key&&failure==='bad:header-lines')record.lines[0].productId='substituted-product';
+    if(resource==='invoices'&&payload.state==='approved'&&failure==='bad:approve-lines')record.lines[0].productId='substituted-product';
     if(resource==='invoices'&&payload.lines){
       record.type=payload.type||'invoice';record.sentState='unsent';
       record.lines=payload.lines.map((line:any,index:number)=>{
@@ -57,10 +60,12 @@ function fixture(){
       if(failure==='bad:invoice-tax')record.tax+=1;
     }
     if(resource==='bills'&&payload.lines){
-      record.lines=payload.lines.map((line:any,index:number)=>({...line,id:`bill-line-${record.id}-${index}`,billId:record.id,tax:payload.taxMode==='incl'?line.amount/5:line.amount/4}));
-      const entered=record.lines.reduce((n:number,line:any)=>n+line.amount,0);
-      record.amount=payload.taxMode==='incl'?entered/1.25:entered;
-      record.tax=record.amount*.25;
+      record.lines=payload.lines.map((line:any,index:number)=>{
+        const amount=payload.taxMode==='incl'?line.amount/1.25:line.amount;
+        return {...line,id:`bill-line-${record.id}-${index}`,billId:record.id,amount,tax:amount*.25};
+      });
+      record.amount=record.lines.reduce((n:number,line:any)=>n+line.amount,0);
+      record.tax=record.lines.reduce((n:number,line:any)=>n+line.tax,0);
       if(failure==='bad:bill-tax')record.tax+=1;
       if(payload.attachmentIds)records.attachments[payload.attachmentIds[0].id].ownerReference=`bill:${record.id}`;
     }
@@ -99,7 +104,7 @@ function fixture(){
     records.attachments['credit-attachment']={id:'credit-attachment',fileId:'synthetic-file'};
     return receipt;
   };
-  return {engine,store,records,calls,fail:(value:string)=>{failure=value;},supplierCreditReceipt};
+  return {engine,store,records,calls,fail:(value:string)=>{failure=value;paymentSubjectGets=0;},supplierCreditReceipt};
 }
 
 const sales={kind:'create_sales_invoice',contactId:'customer',entryDate:'2026-09-01',currencyId:'DKK',taxMode:'excl',
@@ -129,6 +134,20 @@ test('invoice wrong sales tax read-back is unknown and never silently retried',a
     assert.equal(f.store.plan(plan.id).status,'unknown');
     await assert.rejects(f.engine.execute(plan.id,plan.hash),/unknown/);
     assert.equal(f.calls.filter(c=>c.method==='POST'&&c.path==='invoices').length,1);
+  }finally{f.store.close();}
+});
+
+test('draft header edit rejects a changed product even when totals stay correct',async()=>{
+  const f=fixture();
+  try{
+    const created=await f.engine.prepare(sales,'Create draft for line integrity');
+    await f.engine.execute(created.id,created.hash);
+    const plan=await f.engine.prepare({kind:'update_draft_invoice',id:'invoices-1',contactMessage:'Updated',
+      expectedNetAmount:100,expectedTaxAmount:25,expectedTotalAmount:125},'Header only');
+    f.fail('bad:header-lines');
+    await assert.rejects(f.engine.execute(plan.id,plan.hash),/immutable lines/);
+    assert.equal(f.store.plan(plan.id).status,'unknown');
+    assert.equal(f.records.invoices['invoices-1'].amount,100);
   }finally{f.store.close();}
 });
 
@@ -189,12 +208,66 @@ test('customer credit read-back mismatch remains an unknown financial write',asy
   }finally{f.store.close();}
 });
 
+test('customer credit quantity and unit price cannot exceed original or prior credited quantity',async()=>{
+  const f=fixture();f.records.invoices.original={id:'original',type:'invoice',state:'approved',contactId:'customer',currencyId:'DKK',taxMode:'excl',amount:100,tax:25,
+    lines:[{id:'original-line',productId:'product',taxRateId:'vat',quantity:1,unitPrice:100,amount:100,tax:25}]};
+  const base={kind:'create_customer_credit_note',originalInvoiceId:'original',entryDate:'2026-09-02',
+    lines:[{originalLineId:'original-line',productId:'product',salesTaxRulesetId:'rules',expectedTaxRateId:'vat',quantity:2,unitPrice:50}],
+    expectedNetAmount:100,expectedTaxAmount:25,expectedTotalAmount:125};
+  try{
+    await assert.rejects(f.engine.prepare(base,'Quantity over original'),/quantity/);
+    await assert.rejects(f.engine.prepare({...base,lines:[{...base.lines[0],quantity:1,unitPrice:101}]},'Unit price over original'),/unit price/);
+    f.records.invoices.previous={id:'previous',type:'creditNote',state:'approved',creditedInvoiceId:'original',contactId:'customer',currencyId:'DKK',
+      amount:50,tax:12.5,lines:[{id:'prior-line',productId:'product',taxRateId:'vat',quantity:.5,unitPrice:100,amount:50,tax:12.5}]};
+    await assert.rejects(f.engine.prepare({...base,lines:[{...base.lines[0],quantity:.6,unitPrice:50}],
+      expectedNetAmount:30,expectedTaxAmount:7.5,expectedTotalAmount:37.5},'Cumulative quantity over original'),/Cumulative credited quantity/);
+    assert.equal(f.calls.filter(c=>c.method==='POST').length,0);
+  }finally{f.store.close();}
+});
+
+test('credit approval rechecks newly added sibling customer and supplier credits before PUT',async()=>{
+  const f=fixture();f.records.invoices.original={id:'original',type:'invoice',state:'approved',contactId:'customer',currencyId:'DKK',taxMode:'excl',amount:100,tax:25,
+    lines:[{id:'original-line',productId:'product',taxRateId:'vat',quantity:1,unitPrice:100,amount:100,tax:25}]};
+  f.records.invoices.first={id:'first',type:'creditNote',state:'draft',creditedInvoiceId:'original',contactId:'customer',currencyId:'DKK',taxMode:'excl',amount:60,tax:15,
+    lines:[{id:'first-line',productId:'product',taxRateId:'vat',quantity:.6,unitPrice:100,amount:60,tax:15}]};
+  try{
+    const plan=await f.engine.prepare({kind:'approve',resource:'invoices',id:'first'},'Reviewed first customer credit');
+    f.records.invoices.second={id:'second',type:'creditNote',state:'draft',creditedInvoiceId:'original',contactId:'customer',currencyId:'DKK',taxMode:'excl',amount:50,tax:12.5,
+      lines:[{id:'second-line',productId:'product',taxRateId:'vat',quantity:.5,unitPrice:100,amount:50,tax:12.5}]};
+    await assert.rejects(f.engine.execute(plan.id,plan.hash),/exceed/);
+    assert.equal(f.calls.filter(c=>c.method==='PUT'&&c.path==='invoices/first').length,0);
+  }finally{f.store.close();}
+  const g=fixture(),receipt=g.supplierCreditReceipt();g.records.contacts.supplier={id:'supplier',name:'Supplier Ltd',isSupplier:true};
+  g.records.attachments[receipt.attachmentId!].ownerReference='bill:first';
+  g.records.bills.original={id:'original',type:'bill',state:'approved',contactId:'supplier',currencyId:'DKK',taxMode:'incl',suppliersInvoiceNo:'PUR-1',amount:100,tax:25,
+    lines:[{id:'original-line',accountId:'expense',taxRateId:'vat',amount:100,tax:25}]};
+  g.records.bills.first={id:'first',type:'creditNote',state:'draft',creditedBillId:'original',contactId:'supplier',currencyId:'DKK',taxMode:'incl',
+    suppliersInvoiceNo:'CN-1',entryDate:'2026-09-02',amount:40,tax:10,lines:[{id:'first-line',accountId:'expense',taxRateId:'vat',amount:40,tax:10}]};
+  try{
+    const plan=await g.engine.prepare({kind:'approve',resource:'bills',id:'first'},'Reviewed first supplier credit');
+    g.records.bills.second={id:'second',type:'creditNote',state:'draft',creditedBillId:'original',contactId:'supplier',currencyId:'DKK',taxMode:'incl',
+      suppliersInvoiceNo:'CN-2',amount:70,tax:17.5,lines:[{id:'second-line',accountId:'expense',taxRateId:'vat',amount:70,tax:17.5}]};
+    await assert.rejects(g.engine.execute(plan.id,plan.hash),/exceed/);
+    assert.equal(g.calls.filter(c=>c.method==='PUT'&&c.path==='bills/first').length,0);
+  }finally{g.store.close();}
+});
+
+test('invoice approval readback preserves reviewed line and totals',async()=>{
+  const f=fixture();f.records.invoices.draft={id:'draft',type:'invoice',state:'draft',contactId:'customer',currencyId:'DKK',taxMode:'excl',entryDate:'2026-09-01',amount:100,tax:25,
+    lines:[{id:'line',productId:'product',taxRateId:'vat',quantity:1,unitPrice:100,amount:100,tax:25}]};
+  try{
+    const plan=await f.engine.prepare({kind:'approve',resource:'invoices',id:'draft'},'Reviewed invoice draft');
+    f.fail('bad:approve-lines');await assert.rejects(f.engine.execute(plan.id,plan.hash),/financial identity/);
+    assert.equal(f.store.plan(plan.id).status,'unknown');
+  }finally{f.store.close();}
+});
+
 test('supplier credit note requires original bill and uploaded credit evidence, then prevents duplicate and overcredit',async()=>{
   const f=fixture(),receipt=f.supplierCreditReceipt();
   f.records.contacts.supplier={id:'supplier',name:'Supplier Ltd',isSupplier:true};
   f.records.accounts.expense={id:'expense',isArchived:false};
   f.records.bills.original={id:'original',type:'bill',state:'approved',contactId:'supplier',currencyId:'DKK',taxMode:'incl',
-    suppliersInvoiceNo:'PUR-1',amount:100,tax:25,lines:[{id:'original-line',accountId:'expense',taxRateId:'vat',description:'Materials',amount:125,tax:25}]};
+    suppliersInvoiceNo:'PUR-1',amount:100,tax:25,lines:[{id:'original-line',accountId:'expense',taxRateId:'vat',description:'Materials',amount:100,tax:25}]};
   const op={kind:'create_supplier_credit_note',receiptId:receipt.id,originalBillId:'original',entryDate:'2026-09-02',
     lines:[{originalLineId:'original-line',accountId:'expense',taxRateId:'vat',description:'Materials refund',amount:50}],
     expectedNetAmount:40,expectedTaxAmount:10,expectedTotalAmount:50};
@@ -212,9 +285,9 @@ test('supplier credit note requires original bill and uploaded credit evidence, 
   const g=fixture(),secondReceipt=g.supplierCreditReceipt();
   g.records.contacts.supplier={id:'supplier',name:'Supplier Ltd',isSupplier:true};g.records.accounts.expense={id:'expense',isArchived:false};
   g.records.bills.original={id:'original',type:'bill',state:'approved',contactId:'supplier',currencyId:'DKK',taxMode:'incl',
-    suppliersInvoiceNo:'PUR-1',amount:100,tax:25,lines:[{id:'original-line',accountId:'expense',taxRateId:'vat',description:'Materials',amount:125,tax:25}]};
+    suppliersInvoiceNo:'PUR-1',amount:100,tax:25,lines:[{id:'original-line',accountId:'expense',taxRateId:'vat',description:'Materials',amount:100,tax:25}]};
   g.records.bills.previous={id:'previous',type:'creditNote',state:'approved',creditedBillId:'original',contactId:'supplier',currencyId:'DKK',
-    suppliersInvoiceNo:'OLDER-CN',amount:80,tax:20,lines:[{id:'previous-line',accountId:'expense',taxRateId:'vat',description:'Earlier refund',amount:100,tax:20}]};
+    suppliersInvoiceNo:'OLDER-CN',amount:80,tax:20,lines:[{id:'previous-line',accountId:'expense',taxRateId:'vat',description:'Earlier refund',amount:80,tax:20}]};
   try{await assert.rejects(g.engine.prepare({...op,receiptId:secondReceipt.id},'Reject cumulative overcredit'),/exceeds|exceed/);}
   finally{g.store.close();}
 });
@@ -223,7 +296,7 @@ test('supplier credit bad read-back is unknown and blocks retry',async()=>{
   const f=fixture(),receipt=f.supplierCreditReceipt();
   f.records.contacts.supplier={id:'supplier',name:'Supplier Ltd',isSupplier:true};f.records.accounts.expense={id:'expense',isArchived:false};
   f.records.bills.original={id:'original',type:'bill',state:'approved',contactId:'supplier',currencyId:'DKK',taxMode:'incl',
-    suppliersInvoiceNo:'PUR-1',amount:100,tax:25,lines:[{id:'original-line',accountId:'expense',taxRateId:'vat',description:'Materials',amount:125,tax:25}]};
+    suppliersInvoiceNo:'PUR-1',amount:100,tax:25,lines:[{id:'original-line',accountId:'expense',taxRateId:'vat',description:'Materials',amount:100,tax:25}]};
   try{
     const plan=await f.engine.prepare({kind:'create_supplier_credit_note',receiptId:receipt.id,originalBillId:'original',entryDate:'2026-09-02',
       lines:[{originalLineId:'original-line',accountId:'expense',taxRateId:'vat',description:'Materials refund',amount:50}],
@@ -257,6 +330,18 @@ test('same-currency provider fee and partial foreign bill payment verify exact l
     assert.equal(done.result.subject.balanceModifiers.length,2);
     assert.equal(done.result.ledger.postings.find((p:any)=>p.accountId==='fx').amount,5);
   }finally{g.store.close();}
+});
+
+test('payment rechecks subject immediately before POST when balance shrinks after inspect',async()=>{
+  const f=fixture();f.records.invoices.invoice={id:'invoice',state:'approved',type:'invoice',currencyId:'DKK',balance:95,isPaid:false,balanceModifiers:[]};
+  try{
+    const plan=await f.engine.prepare({kind:'create_payment',entryDate:'2026-09-01',cashAmount:95,cashSide:'debit',cashAccountId:'bank',
+      bankLineId:'line',subjectReference:'invoice:invoice'},'Exact bank line and outstanding invoice');
+    f.fail('drift:payment-subject');
+    await assert.rejects(f.engine.execute(plan.id,plan.hash),/changed since the reviewed snapshot/);
+    assert.equal(f.calls.filter(c=>c.method==='POST'&&c.path==='bankPayments').length,0);
+    assert.equal(f.store.plan(plan.id).status,'rejected');
+  }finally{f.store.close();}
 });
 
 test('wrong fee ledger posting records unknown outcome',async()=>{
