@@ -19,7 +19,7 @@ const filters:Record<Resource,string[]>={
   bankPayments:[],bankLineMatches:[],bankLineSubjectAssociations:[],daybooks:[],taxRates:[],files:[],salesTaxReturns:[],transactions:[],products:['isArchived'],
 };
 export function createServer(config:Config,client=new BillyClient(config.token,config.organizationId),store=new Store(config.dataDir,config.inbox,config.organizationId)) {
-  const server=new McpServer({name:'billy-mcp',version:'0.1.0'});
+  const server=new McpServer({name:'billy-mcp',version:'0.1.1'});
   const engine=new Engine(client,store,config);
   function tool(name:string,description:string,schema:any,mutates:boolean,handler:(args:any)=>Promise<any>|any) {
     server.registerTool(name,{description,inputSchema:schema,annotations:{readOnlyHint:!mutates,destructiveHint:mutates,idempotentHint:!mutates,openWorldHint:true}},async(args:any)=>{

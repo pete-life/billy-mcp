@@ -7,6 +7,8 @@ description: Collect original receipts from mail, files or vendor billing portal
 
 ## Gotchas
 
+- Every payment requires a live, explicitly unapproved single-line bank match with no subject associations. A missing `bankLine.isReconciled` field or an empty local journal is not proof that a bank movement is unused. The MCP rechecks the match immediately before writing.
+
 - A completed write followed by a failed read remains a completed write. Inspect its saved plan and the existing record; never recreate it. Embedded bill lines require `bill.lines:embed`, not `lines`.
 - `unknown` or interrupted `executing` outcomes stop further company writes. Do not edit the database, bypass the MCP, change operation wording or invoke recovery to force another attempt.
 - A receipt marked paid is not proof of a settled bank movement. Payment requires the exact bank line; reconciliation matches the resulting existing posting.

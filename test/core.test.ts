@@ -187,6 +187,52 @@ test('bank matching gate, overpayment and foreign currency fail before writes',a
   const op={kind:'create_payment',entryDate:'2026-09-01',cashAmount:125,cashSide:'credit',cashAccountId:'bank',bankLineId:'line',subjectReference:'bill:bill'};
   await assert.rejects(f.engine.prepare(op,'Confirmed payment'),/exceeds/);f.records.bills.bill.currencyId='USD';await assert.rejects(f.engine.prepare(op,'Confirmed payment'),/Foreign/);f.store.close();
 });
+test('same-currency payment rejects an already approved remote match with an empty local journal',async()=>{
+  const f=fixture();
+  f.records.bills.bill={id:'bill',state:'approved',balance:125,currencyId:'DKK'};
+  f.records.bankLineMatches.match.isApproved=true;
+  assert.equal(f.records.bankLines.line.isReconciled,undefined);
+  assert.equal(f.store.bankLineBooked('line'),false);
+  const op={kind:'create_payment',entryDate:'2026-09-01',cashAmount:125,cashSide:'credit',cashAccountId:'bank',bankLineId:'line',subjectReference:'bill:bill'};
+  try {
+    await assert.rejects(f.engine.prepare(op,'Existing remote bank match must block payment'),/unapproved/);
+    assert.equal(f.calls.filter(c=>c.method!=='GET').length,0);
+  }finally{f.store.close();}
+});
+test('payment requires an inspectable empty single-line remote match',async()=>{
+  for(const change of [
+    (f:any)=>{delete f.records.bankLines.line.matchId;},
+    (f:any)=>{delete f.records.bankLineMatches.match.isApproved;},
+    (f:any)=>{delete f.records.bankLineMatches.match.lines;},
+    (f:any)=>{delete f.records.bankLineMatches.match.subjectAssociations;},
+    (f:any)=>{f.records.bankLineMatches.match.lines.push({id:'other'});},
+    (f:any)=>{f.records.bankLineMatches.match.lines=[{id:'other'}];},
+    (f:any)=>{f.records.bankLineMatches.match.subjectAssociations=[{subjectReference:'posting:existing'}];},
+  ]){
+    const f=fixture();f.records.bills.bill={id:'bill',state:'approved',balance:125,currencyId:'DKK'};change(f);
+    try {
+      await assert.rejects(f.engine.prepare({kind:'create_payment',entryDate:'2026-09-01',cashAmount:125,cashSide:'credit',cashAccountId:'bank',bankLineId:'line',subjectReference:'bill:bill'},'Reject missing or occupied remote bank match'),/match|associations/);
+      assert.equal(f.calls.filter(c=>c.method!=='GET').length,0);
+    }finally{f.store.close();}
+  }
+});
+test('payment rechecks remote approval and associations immediately before writing',async()=>{
+  for(const change of [
+    (f:any)=>{f.records.bankLineMatches.match.isApproved=true;},
+    (f:any)=>{f.records.bankLineMatches.match.subjectAssociations=[{subjectReference:'posting:existing'}];},
+  ]){
+    const f=fixture();f.records.bills.bill={id:'bill',state:'approved',balance:125,currencyId:'DKK'};
+    try {
+      const plan=await f.engine.prepare({kind:'create_payment',entryDate:'2026-09-01',cashAmount:125,cashSide:'credit',cashAccountId:'bank',bankLineId:'line',subjectReference:'bill:bill'},'Preview an initially empty remote bank match');
+      assert.ok(plan.snapshots.some(s=>s.resource==='bankLineMatches'&&s.id==='match'));
+      change(f);
+      await assert.rejects(f.engine.execute(plan.id,plan.hash),/unapproved|associations/);
+      assert.equal(f.store.plan(plan.id).status,'rejected');
+      assert.equal(f.calls.filter(c=>c.method!=='GET').length,0);
+      assert.equal(f.records.bills.bill.balance,125);
+    }finally{f.store.close();}
+  }
+});
 test('foreign full settlement requires complete, matching FX evidence',async()=>{
   const f=fixture();
   f.records.bankLines.line={...f.records.bankLines.line,amount:140,entryDate:'2026-02-10'};
@@ -247,7 +293,8 @@ test('equal instalments are distinct by bank line and cannot be silently replaye
   const op={kind:'create_payment',entryDate:'2026-09-01',cashAmount:125,cashSide:'credit',cashAccountId:'bank',bankLineId:'line',subjectReference:'bill:bill'};
   const first=await f.engine.prepare(op,'First verified instalment');await f.engine.execute(first.id,first.hash);
   await assert.rejects(f.engine.prepare(op,'Same line again'),/already executed/);
-  f.records.bankLines.line2={...f.records.bankLines.line,id:'line2'};
+  f.records.bankLines.line2={...f.records.bankLines.line,id:'line2',matchId:'match2'};
+  f.records.bankLineMatches.match2={id:'match2',isApproved:false,lines:[{id:'line2'}],subjectAssociations:[]};
   const second=await f.engine.prepare({...op,bankLineId:'line2'},'Second verified instalment');assert.notEqual(first.id,second.id);
   await f.engine.execute(second.id,second.hash);assert.equal(f.records.bills.bill.balance,0);f.store.close();
 });
