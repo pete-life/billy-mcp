@@ -95,6 +95,7 @@ export class Reports {
       else if(nature.normalBalance==='debit')expense.add(account.id);
       else throw new Error(`Nature ${natureId} has unsupported normalBalance`);
     }
+    if(!revenue.size&&!expense.size)throw new Error(`No accounts match reportType ${reportType}`);
     return {revenue,expense};
   }
   async profitLoss(start:string,end:string,options:{reportType?:string;revenueAccountIds?:string[];expenseAccountIds?:string[]},verbose=false){
@@ -104,6 +105,7 @@ export class Reports {
     if(explicit&&(!options.revenueAccountIds||!options.expenseAccountIds))throw new Error('Explicit P&L needs both revenueAccountIds and expenseAccountIds');
     const reportType=options.reportType??'incomeStatement';
     const selected=explicit?{revenue:uniqueIds(options.revenueAccountIds!),expense:uniqueIds(options.expenseAccountIds!)}:await this.classifiedAccounts(ledger,reportType);
+    if(!selected.revenue.size&&!selected.expense.size)throw new Error('Select at least one P&L account');
     for(const id of selected.revenue)if(!ledger.accountById.has(id))throw new Error(`Unknown account ${id}`);
     for(const id of selected.expense)if(!ledger.accountById.has(id))throw new Error(`Unknown account ${id}`);
     for(const id of selected.revenue)if(selected.expense.has(id))throw new Error(`Account ${id} is both revenue and expense`);
@@ -136,25 +138,28 @@ export class Reports {
   }
   async outstanding(){
     await this.client.verifyOrganization();
-    const [bills,invoices]=await Promise.all([this.client.list('bills',{state:'approved',isPaid:false}),this.client.list('invoices',{state:'approved',isPaid:false})]);
+    const [bills,invoices]=await Promise.all([this.client.list('bills'),this.client.list('invoices')]);
     const collect=(records:RecordData[],kind:'bill'|'invoice')=>records.filter(r=>{
       if(typeof r.state!=='string')throw new Error(`${kind} ${r.id} is missing state`);
       return r.state==='approved';
     }).map(r=>{
       if(typeof r.id!=='string'||!r.id)throw new Error(`${kind} is missing id`);
       const balance=signedCents(r.balance,`${kind} ${r.id} balance`),currencyId=requiredId(r,'currency',kind);
-      return {id:r.id,contactId:idOf(r,'contact'),entryDate:r.entryDate,dueDate:r.dueDate,currencyId,
+      if(typeof r.type!=='string'||!r.type)throw new Error(`${kind} ${r.id} is missing document type`);
+      return {id:r.id,type:r.type,contactId:idOf(r,'contact'),entryDate:r.entryDate,dueDate:r.dueDate,currencyId,
         balance:money(balance),state:r.state,...(kind==='bill'?{suppliersInvoiceNo:r.suppliersInvoiceNo}:{invoiceNo:r.invoiceNo})};
     }).filter(r=>r.balance!==0);
-    const openBills=collect(bills,'bill'),openInvoices=collect(invoices,'invoice');
+    const billRows=collect(bills,'bill'),invoiceRows=collect(invoices,'invoice');
+    const openBills=billRows.filter(r=>r.type!=='creditNote'),openInvoices=invoiceRows.filter(r=>r.type!=='creditNote');
+    const creditNotes={bills:billRows.filter(r=>r.type==='creditNote'),invoices:invoiceRows.filter(r=>r.type==='creditNote')};
     const totals=(records:typeof openBills)=>{
       const grouped=new Map<string,{balance:number;count:number}>();
       for(const r of records){const value=grouped.get(r.currencyId)??{balance:0,count:0};value.balance+=Math.round(r.balance*100);value.count++;grouped.set(r.currencyId,value);}
       return [...grouped].map(([currencyId,value])=>({currencyId,balance:money(value.balance),count:value.count}));
     };
-    return {observedAt:new Date().toISOString(),bills:openBills,invoices:openInvoices,
+    return {observedAt:new Date().toISOString(),bills:openBills,invoices:openInvoices,creditNotes,
       totals:{payablesByCurrency:totals(openBills),receivablesByCurrency:totals(openInvoices)},
       sourceCounts:{bills:bills.length,invoices:invoices.length},complete:true,
-      basis:'Current approved document balances only. This is not a historical as-of balance; currencies are not mixed or converted.'};
+      basis:'Current approved document balances only. Credit notes are shown separately and excluded from payable/receivable totals; their balance polarity is not inferred. This is not a historical as-of balance; currencies are not mixed or converted.'};
   }
 }

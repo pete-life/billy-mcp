@@ -47,7 +47,7 @@ export function createServer(config:Config,client=new BillyClient(config.token,c
     return presentList(resource,await client.list(resource,query),verbose);
   });
   tool('billy_get','Read a Billy record and optionally sideload relationships. Default response is compact; verbose returns sanitized detail.',{resource:z.enum(Object.keys(resources) as [Resource,...Resource[]]),id:identifier,include:z.string().regex(/^[A-Za-z.,:]+$/).optional(),verbose:z.boolean().default(false)},false,
-    async({resource,id,include,verbose})=>{await client.verifyOrganization();return presentGet(resource,await client.get(resource,id,include),verbose);});
+    async({resource,id,include,verbose})=>{await client.verifyOrganization();return presentGet(resource,await client.get(resource,id,include),verbose,include);});
   tool('billy_period_overview','Inventory unreconciled bank lines, existing postings, bills and collected receipts for a period. Candidate matches are suggestions, not an accounting verdict.',{start:date,end:date,verbose:z.boolean().default(false)},false,
     async({start,end,verbose})=>presentOverview(await engine.overview(start,end),verbose));
   tool('billy_trial_balance','Balances by live account through an inclusive posting entry date. Uses base currency and rejects FX postings without a base amount.',

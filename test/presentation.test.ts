@@ -25,20 +25,34 @@ test('recursive sanitization removes credentials and links but preserves account
   assert.doesNotMatch(JSON.stringify(safe),/abc|accessCode|apiKey|signedUrl|authorization/);
 });
 
-test('status, overview and plan defaults preserve decision-critical fields without paths',()=>{
+test('status, overview and plan defaults retain workflow IDs and required local paths',()=>{
   const status=presentStatus({tokenConfigured:true,organizationId:'org',writesEnabled:true,bankMatchingEnabled:false,
     receiptInbox:'/private/inbox',dataDirectory:'/private/data',organization:{id:'org',name:'Example'}},false);
-  assert.equal(status.organizationId,'org');assert.doesNotMatch(JSON.stringify(status),/private/);
+  assert.equal(status.organizationId,'org');assert.equal(status.dataDirectory,'/private/data');assert.equal(status.receiptInbox,'/private/inbox');
   const overview=presentOverview({period:{start:'2026-09-01',end:'2026-09-30'},unreconciledBankLines:[{id:'line',accountId:'bank',amount:10,
     candidatePostings:[{id:'posting',text:'Sensitive',entryDate:'2026-09-02'}],note:'check'}],bills:[],receipts:[{id:'receipt',name:'invoice.pdf',path:'/private/a'}],
     vendors:[{id:'vendor',name:'Example',status:'ready',portalUrl:'https://example.test'}],completion:'Inventory only'},false);
   assert.equal(overview.counts.unreconciledBankLines,1);
   assert.equal(overview.unreconciledBankLines[0].candidatePostings[0].id,'posting');
-  assert.doesNotMatch(JSON.stringify(overview),/private|Sensitive|https/);
+  assert.equal(overview.unreconciledBankLines[0].candidatePostings[0].text,'Sensitive');
+  assert.doesNotMatch(JSON.stringify(overview),/private|https/);
   const plan=presentPlan({id:'plan',hash:'hash',status:'prepared',createdAt:'2026-09-01',reason:'Pay bill',
     operation:{kind:'create_payment',cashAmount:10,bankLineId:'line',accessCode:'bad'},
     snapshots:[{resource:'bills',id:'bill',hash:'snapshot-hash',record:{contactName:'Private'}}]},false);
   assert.equal(plan.hash,'hash');assert.equal((plan.operation as any).cashAmount,10);
   assert.deepEqual(plan.snapshots,[{resource:'bills',id:'bill',hash:'snapshot-hash'}]);
   assert.doesNotMatch(JSON.stringify(plan),/Private|accessCode|bad/);
+});
+
+test('compact get keeps requested embedded bill evidence and safe local file paths',()=>{
+  const bill={id:'bill',organizationId:'org',state:'approved',amount:100,tax:25,grossAmount:125,taxMode:'excl',
+    currencyId:'DKK',exchangeRate:1,lines:[{id:'line',accountId:'expense',taxRateId:'vat',description:'Hosting',amount:100,tax:25}],
+    attachmentIds:['att'],downloadUrl:'https://example.test/?signature=secret'};
+  const output=presentGet('bills',bill,false,'bill.lines:embed');
+  assert.deepEqual((output.record as any).lines,[{id:'line',amount:100,tax:25,accountId:'expense',taxRateId:'vat',description:'Hosting'}]);
+  assert.equal((output.record as any).grossAmount,125);assert.equal((output.record as any).exchangeRate,1);
+  assert.equal((output.record as any).taxMode,'excl');assert.doesNotMatch(JSON.stringify(output),/signature|secret/);
+  const operation=safeValue({filePath:'/tmp/receipts/invoice.pdf',portalUrl:'https://example.test/billing',accessCode:'secret'});
+  assert.equal((operation as any).filePath,'/tmp/receipts/invoice.pdf');assert.equal((operation as any).portalUrl,'https://example.test/billing');
+  assert.equal((operation as any).accessCode,undefined);
 });

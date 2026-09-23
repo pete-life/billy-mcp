@@ -24,11 +24,13 @@ function fixture(){
       {id:'void',organizationId:'org',accountId:'expense',entryDate:'2026-09-01',amount:999,side:'debit',currencyId:'DKK',isVoided:true},
       {id:'future',organizationId:'org',accountId:'expense',entryDate:'2026-10-01',amount:999,side:'debit',currencyId:'DKK',isVoided:false},
     ],
-    bills:[{id:'bill-open',organizationId:'org',state:'approved',balance:12.34,currencyId:'USD',contactId:'vendor',entryDate:'2026-05-01'},
-      {id:'bill-paid',organizationId:'org',state:'approved',balance:0,currencyId:'DKK'},
-      {id:'bill-draft',organizationId:'org',state:'draft',balance:9,currencyId:'DKK'}],
-    invoices:[{id:'invoice-open',organizationId:'org',state:'approved',balance:5.67,currencyId:'DKK',contactId:'customer'},
-      {id:'invoice-paid',organizationId:'org',state:'approved',balance:0,currencyId:'USD'}],
+    bills:[{id:'bill-open',organizationId:'org',type:'bill',state:'approved',balance:12.34,currencyId:'USD',contactId:'vendor',entryDate:'2026-05-01'},
+      {id:'bill-paid',organizationId:'org',type:'bill',state:'approved',balance:0,currencyId:'DKK'},
+      {id:'bill-draft',organizationId:'org',type:'bill',state:'draft',balance:9,currencyId:'DKK'},
+      {id:'bill-credit',organizationId:'org',type:'creditNote',state:'approved',balance:4,currencyId:'USD'}],
+    invoices:[{id:'invoice-open',organizationId:'org',type:'invoice',state:'approved',balance:5.67,currencyId:'DKK',contactId:'customer'},
+      {id:'invoice-paid',organizationId:'org',type:'invoice',state:'approved',balance:0,currencyId:'USD'},
+      {id:'invoice-credit',organizationId:'org',type:'creditNote',state:'approved',balance:2,currencyId:'DKK'}],
   };
   const calls:string[]=[];
   const fetcher=async(input:string|URL|Request):Promise<Response>=>{
@@ -77,7 +79,9 @@ test('outstanding uses current balances, excludes paid and drafts locally, and n
   assert.equal(report.bills.length,1);assert.equal(report.invoices.length,1);
   assert.deepEqual(report.totals.payablesByCurrency,[{currencyId:'USD',balance:12.34,count:1}]);
   assert.deepEqual(report.totals.receivablesByCurrency,[{currencyId:'DKK',balance:5.67,count:1}]);
-  assert.equal(report.sourceCounts.bills,3);assert.equal(report.complete,true);
+  assert.deepEqual(report.creditNotes.bills.map(r=>r.id),['bill-credit']);
+  assert.deepEqual(report.creditNotes.invoices.map(r=>r.id),['invoice-credit']);
+  assert.equal(report.sourceCounts.bills,4);assert.equal(report.complete,true);
 });
 
 test('reports fail explicitly on missing or malformed financial evidence',async()=>{
@@ -89,6 +93,8 @@ test('reports fail explicitly on missing or malformed financial evidence',async(
   await assert.rejects(voided.reports.trialBalance('2026-09-30'),/missing isVoided/);
   const missingBalance=fixture();delete missingBalance.records.bills.find(b=>b.id==='bill-open')!.balance;
   await assert.rejects(missingBalance.reports.outstanding(),/balance must be/);
+  const missingNature=fixture();delete missingNature.records.accountGroups.find(g=>g.id==='costs')!.natureId;
+  await assert.rejects(missingNature.reports.periodExpenses('2026-09-01','2026-09-30','incomeStatement'),/missing natureId/);
   const wrongOrg=fixture();wrongOrg.records.postings.find(p=>p.id==='sale')!.organizationId='another';
   await assert.rejects(wrongOrg.reports.trialBalance('2026-09-30'),/Cross-organization/);
 });

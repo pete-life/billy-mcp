@@ -5,11 +5,12 @@ import type {Plan} from './store.js';
 // the default MCP context. Every record is retained; callers can opt into more
 // fields without affecting the data used by Engine or Reports.
 const common=['id','organizationId','name','entryDate','dueDate','createdTime','approvedTime','state','status','type',
-  'currencyId','amount','tax','balance','isPaid','isVoided','isBankMatched','side','accountId','transactionId',
+  'currencyId','amount','grossAmount','tax','taxMode','balance','exchangeRate','isPaid','isVoided','isBankMatched','side','accountId','transactionId',
   'contactId','invoiceNo','suppliersInvoiceNo','voucherNo','systemRole','groupId','natureId','reportType',
   'normalBalance','accountNo','isArchived','isBankAccount','isReconciled','matchId','ownerReference',
-  'fileId','attachmentId','bankLineId','subjectReference','modifierReference','source','reference'] as const;
-const blockedKey=/password|passphrase|secret|token|credential|apiKey|accessCode|authorization|cookie|session|signed|downloadUrl|fileUrl|(^|_)(path)$|Path$/i;
+  'fileId','attachmentId','bankLineId','subjectReference','modifierReference','taxRateId','quantity','unitPrice','rate',
+  'text','source','reference'] as const;
+const blockedKey=/password|passphrase|secret|token|credential|apiKey|accessCode|authorization|cookie|session|signed|downloadUrl|fileUrl/i;
 function unsafeUrl(value:string){
   try{const url=new URL(value);return Boolean(url.username||url.password||url.search||url.hash||/(?:token|secret|accesscode|signed|signature)[=/]/i.test(url.pathname));}
   catch{return false;}
@@ -29,27 +30,49 @@ export function safeValue(value:unknown):unknown {
 export function compactRecord(record:RecordData):RecordData {
   const result:RecordData={};
   for(const key of common)if(record[key]!==undefined&&!blockedKey.test(key))result[key]=record[key];
-  if(Array.isArray(record.candidatePostings))result.candidatePostings=record.candidatePostings.map((p:RecordData)=>({id:p.id,entryDate:p.entryDate}));
+  if(Array.isArray(record.lines))result.lines=record.lines.map((line:RecordData)=>{
+    const compact=compactRecord(line);
+    if(typeof line.description==='string')compact.description=line.description;
+    return compact;
+  });
+  for(const key of ['attachments','balanceModifiers','subjectAssociations'])if(Array.isArray(record[key]))result[key]=record[key].map(compactRecord);
+  if(Array.isArray(record.candidatePostings))result.candidatePostings=record.candidatePostings.map((p:RecordData)=>({id:p.id,text:p.text,entryDate:p.entryDate}));
   return safeValue(result) as RecordData;
 }
 
 export function presentList(resource:Resource,records:RecordData[],verbose=false){
-  return {resource,count:records.length,complete:true,records:verbose?safeValue(records):records.map(compactRecord)};
+  return {resource,count:records.length,complete:true,records:verbose?safeValue(records):records.map(record=>{
+    const compact=compactRecord(record);if(resource==='bankLines'&&typeof record.description==='string')compact.description=sanitizeText(record.description);
+    return compact;
+  })};
 }
-export function presentGet(resource:Resource,record:RecordData,verbose=false){
-  return {resource,complete:true,record:verbose?safeValue(record):compactRecord(record)};
+export function presentGet(resource:Resource,record:RecordData,verbose=false,include?:string){
+  if(verbose)return {resource,complete:true,record:safeValue(record)};
+  const compact=compactRecord(record);
+  if(resource==='bankLines'&&typeof record.description==='string')compact.description=sanitizeText(record.description);
+  for(const term of include?.split(',')??[]){
+    const match=term.match(/^[A-Za-z]+\.([A-Za-z]+):embed$/);
+    if(!match)continue;
+    const key=match[1]!;
+    if(compact[key]!==undefined)continue;
+    if(record[key]&&typeof record[key]==='object')compact[key]=Array.isArray(record[key])?record[key].map(compactRecord):compactRecord(record[key]);
+  }
+  return {resource,complete:true,record:compact};
 }
 export function presentStatus(status:RecordData,verbose=false){
   if(verbose)return safeValue(status);
   return {tokenConfigured:status.tokenConfigured,organizationId:status.organizationId,writesEnabled:status.writesEnabled,
-    bankMatchingEnabled:status.bankMatchingEnabled,organization:status.organization?compactRecord(status.organization):undefined};
+    bankMatchingEnabled:status.bankMatchingEnabled,receiptInbox:status.receiptInbox,dataDirectory:status.dataDirectory,
+    organization:status.organization?compactRecord(status.organization):undefined};
 }
 export function presentOverview(overview:RecordData,verbose=false){
   if(verbose)return safeValue(overview);
   return {period:overview.period,complete:true,
     counts:{unreconciledBankLines:overview.unreconciledBankLines.length,bills:overview.bills.length,
       receipts:overview.receipts.length,vendors:overview.vendors.length},
-    unreconciledBankLines:overview.unreconciledBankLines.map(compactRecord),bills:overview.bills.map(compactRecord),
+    unreconciledBankLines:overview.unreconciledBankLines.map((line:RecordData)=>{
+      const compact=compactRecord(line);if(typeof line.description==='string')compact.description=sanitizeText(line.description);return compact;
+    }),bills:overview.bills.map(compactRecord),
     receipts:overview.receipts.map((r:RecordData)=>({id:r.id,name:r.name,attachmentId:r.attachmentId})),
     vendors:overview.vendors.map((v:RecordData)=>({id:v.id,name:v.name,status:v.status})),completion:overview.completion};
 }
