@@ -11,7 +11,8 @@ test('real stdio MCP handshake, tool schemas, prompt and guarded errors',async()
   const transport=new StdioClientTransport({command:process.execPath,args:['dist/index.js'],env:{PATH:process.env.PATH!,BILLY_DATA_DIR:root,BILLY_ORGANIZATION_ID:'example-company'},stderr:'pipe'});
   const client=new Client({name:'integration-test',version:'1.0.0'});
   try {
-    await client.connect(transport);const {tools}=await client.listTools();assert.equal(tools.length,13);
+    await client.connect(transport);const {tools}=await client.listTools();assert.equal(tools.length,17);
+    for(const name of ['billy_trial_balance','billy_profit_loss','billy_outstanding','billy_period_expenses'])assert.ok(tools.find(t=>t.name===name)?.annotations?.readOnlyHint);
     assert.ok(tools.find(t=>t.name==='billy_execute')?.annotations?.destructiveHint);
     const status=await client.callTool({name:'billy_status',arguments:{}});assert.equal(status.isError,undefined);assert.match(JSON.stringify(status),/tokenConfigured/);
     const invalid=await client.callTool({name:'billy_prepare',arguments:{operation:{kind:'create_payment',cashAmount:-1},reason:'Bad payment'}});assert.equal(invalid.isError,true);
