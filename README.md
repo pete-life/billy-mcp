@@ -1,8 +1,10 @@
 # Billy MCP
 
-A local MCP server for Billy bookkeeping: complete accounting reads, receipt collection/provenance, reviewed purchase and journal drafts, payments, and reconciliation of existing bank postings. Generic company support: **the API token determines the company**. This is an independent community project, not an official Billy or Shine product.
+A local MCP server for Billy bookkeeping: complete accounting reads, receipt collection/provenance, reviewed purchase and sales drafts, credit notes, payments, reports and reconciliation of existing bank postings. Generic company support: **the API token determines the company**. This is an independent community project, not an official Billy or Shine product.
 
 ## Run
+
+Version 0.2.0 is a release candidate. The scoped npm package and `npx` entry point are prepared, but the package has not yet been published. Use the repository build below for now; see [installation and agent setup](docs/installation.md) for package commands and a reusable installation prompt.
 
 Requires Node.js 22.13+ (built-in SQLite).
 
@@ -43,12 +45,18 @@ Generic MCP client configuration for this checkout:
 | `billy_status` | Connected company, write switches and receipt inbox |
 | `billy_list` / `billy_get` | Typed resource selection, supported filters, full pagination |
 | `billy_period_overview` | Unreconciled bank lines, possible existing postings and receipts |
+| `billy_trial_balance` / `billy_profit_loss` | Account balances and period profit/loss using the live chart |
+| `billy_outstanding` / `billy_period_expenses` | Current unpaid documents and period expense totals |
 | `billy_import_receipt` / `billy_receipts` | Archive originals, deduplicate bytes and retain provenance |
 | `billy_save_vendor` / `billy_vendors` | Vendor billing accounts and retrieval/access status |
 | `billy_prepare` | Preview a concrete financial operation and current record snapshots |
 | `billy_plan` / `billy_refresh_plan` | Inspect or refresh an unexecuted proposal |
 | `billy_execute` | Execute a reviewed proposal once, then read back the outcome |
 | `billy_journal` | Inspect completed, rejected and uncertain operations |
+| `billy_batch_prepare` / `billy_batch_get` | Preflight and inspect 1–10 ordered purchase cases |
+| `billy_batch_refresh` / `billy_batch_execute` | Refresh unstarted scope, approve once and resume guarded stages |
+
+Read tools default to compact, sanitized responses. Lists return `{records,count,complete}`; individual reads return `{record,complete}`. Use `verbose:true` for additional sanitized fields. Every record is retained; compact output does not truncate rows or change internal verification snapshots.
 
 The `bookkeeping-period` MCP prompt loads the [bookkeeping skill](skills/billy-bookkeeping/SKILL.md). It orchestrates Gmail/Drive/local files/**vendor portals** through the agent's existing connectors and browser tools. Those external tools and logged-in sessions are not bundled in this MCP server. Original files are downloaded into the configured inbox, read by the agent and imported with source and extracted invoice metadata. This project does not contain a universal authenticated vendor scraper or built-in OCR.
 
@@ -69,12 +77,17 @@ The learning routine records evidence privately under the configured data direct
 - `create_bill`: create a **draft**, using an uploaded receipt, supplier, invoice date/number, currency, explicit tax mode and account/tax-coded lines. Supplier name and extracted totals must match.
 - `create_journal`: create a balanced **draft**, with receipt or explicit no-receipt reason plus bank-line identity. Tax-coded journal expansion is not live-verified; use a purchase bill for VAT-coded expenses.
 - `approve`: approve a reviewed bill, invoice or journal draft. Bills require attached evidence.
-- `create_payment`: register a same-currency bill/invoice payment or an explicitly evidenced full foreign-currency supplier-bill settlement from a base-currency bank account against an existing unpaid balance and an identified bank line. All payments require a live, explicitly unapproved single-line bank match without existing subject associations; this is rechecked before writing. Equal instalments on separate bank lines remain separate operations. This is bookkeeping, not a bank transfer.
+- `create_sales_invoice` / `update_draft_invoice`: create a reviewed sales draft or edit its documented header fields. Invoice lines cannot be replaced after creation.
+- `send_invoice`: send an approved sales invoice to one reviewed contact-person email in a separate operation.
+- `create_customer_credit_note` / `create_supplier_credit_note`: create an original-linked, amount-limited draft credit note. Supplier credits require their original credit document.
+- `create_payment`: register full/partial same-currency payments, supported supplier FX settlements and evidenced fees against an exact unused bank line. Fee-bearing payments require a base-currency cash account; ambiguous FX rounding is rejected before writing. This records money already moved, not a bank transfer.
 - `reconcile`: associate one bank line's existing match with an existing bank-account posting and approve it. No expense is created. This is separately gated and live-verified for the documented single-line DKK flow.
+
+See [operation contracts and limitations](docs/operations.md) for required evidence, supported currency combinations and verification status. [Purchase batches](docs/batches.md) execute original upload, draft, optional approval, payment and reconciliation with persistent per-stage progress.
 
 ## Execution guarantees and limits
 
-Writes are off by default. To enable them after setup/acceptance, set `BILLY_ALLOW_WRITES=true` in the local credentials file or process environment. This enables the capability; it does not authorize arbitrary financial actions. The calling agent must have authorization for the concrete action or reviewed batch. The `authorization` text is an audit assertion, not a human-approval security boundary.
+Writes are off by default. To enable them after setup/acceptance, set `BILLY_ALLOW_WRITES=true` in the local credentials file or process environment. This enables the capability; it does not authorize arbitrary financial actions. Default `BILLY_APPROVAL_MODE=confirm` requires a user-facing MCP form approving the exact single operation or complete batch. Unsupported clients, decline and cancellation fail closed. An operator can explicitly choose `BILLY_APPROVAL_MODE=trusted_automation` in their private local profile for authorized automation. The `authorization` text remains an audit note, never proof of consent. See [approval modes](docs/batches.md).
 
 Each preview has a persisted ID and hash binding the operation **and the current records**. Execution claims a company-wide SQLite lock, validates fresh data, writes and reads back. Repeated execution returns stored evidence. Another changed request is still another operation: callers must not use different wording/amounts to bypass an uncertain write.
 
@@ -88,11 +101,11 @@ Each preview has a persisted ID and hash binding the operation **and the current
 
 ## Live verification status
 
-**Live purchase flow verified on 2026-09-22:** company-token connection, original PDF upload, attachment linking, Danish VAT purchase draft, approval and independent balanced-ledger readback were verified through the live API. Supplier legal-name changes can be matched by verified country and registration number. Build and 37 automated tests pass. A same-currency DKK supplier payment and single-posting bank reconciliation were also live-verified on 2026-09-22, including independent balanced-ledger and zero-balance checks; see [live acceptance](docs/live-acceptance.md).
+**Live purchase flow verified on 2026-09-22:** company-token connection, original PDF upload, attachment linking, Danish VAT purchase draft, approval and independent balanced-ledger readback were verified through the live API. Supplier legal-name changes can be matched by verified country and registration number. A same-currency DKK supplier payment and single-posting bank reconciliation were also live-verified on 2026-09-22, including independent balanced-ledger and zero-balance checks; see [live acceptance](docs/live-acceptance.md).
 
 `BILLY_ALLOW_BANK_MATCHING` defaults to false independently of other writes. Public documentation labels match relationships read-only and does not explain the full approval sequence. The implemented single-posting sequence follows the separate documented association resource; the single-line DKK flow was subsequently live-validated; other variants remain unverified.
 
-Current explicit exceptions: foreign-currency payments outside full supplier-bill/base-currency-bank settlement, grouped/partial bank matches, credit notes/refunds, automatic VAT-return filing, VAT-period settlement, subscription changes, bank transfers, remote hosting, background scheduling, bulk batch atomicity and automatic recovery of unknown writes, and tax-coded journal expansion.
+All four v0.2 reports completed in a GET-only live probe on 2026-09-23. The sales, credit-note, partial-FX, fee, approval and batch paths are fixture tested; they are not newly live-verified. Current exceptions include FX customer receipts and non-base-bank FX settlement, ambiguous cent allocations, grouped/split bank matches, credit-note settlement/refunds, automatic VAT filing or settlement, subscription changes, bank transfers, remote hosting, scheduling, remote batch atomicity and automatic recovery of unknown writes. Tax-coded journal expansion remains unverified.
 
 ## Operator recovery
 
@@ -114,7 +127,7 @@ npm run check
 
 Tests use temporary local files and simulated Billy responses. The stdio test starts the compiled MCP server and performs protocol initialization, tool discovery, validation errors and prompt retrieval. No test touches production accounting data.
 
-Official references: [Billy API](https://www.billy.dk/api/), [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk/tree/v1.x). API documentation checked 2026-09-22.
+Official references: [Billy API](https://www.billy.dk/api/), [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk/tree/v1.x). API documentation checked 2026-09-23.
 
 ## License and contributions
 

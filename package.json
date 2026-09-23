@@ -1,8 +1,25 @@
 {
-  "name": "billy-mcp",
-  "version": "0.1.1",
-  "private": true,
+  "name": "@pete-life/billy-mcp",
+  "version": "0.2.0",
   "type": "module",
+  "bin": {
+    "billy-mcp": "dist/cli.js"
+  },
+  "files": [
+    "dist/",
+    "skills/billy-bookkeeping/",
+    "docs/installation.md",
+    "docs/live-acceptance.md",
+    "docs/batches.md",
+    "docs/operations.md",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=22.13"
   },
@@ -13,7 +30,8 @@
     "check": "npm run build && npm test",
     "doctor": "tsx src/doctor.ts",
     "setup": "tsx src/setup.ts",
-    "recover": "tsx src/recover.ts"
+    "recover": "tsx src/recover.ts",
+    "prepack": "npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",

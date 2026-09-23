@@ -1,8 +1,8 @@
 export type RecordData = Record<string, any>;
 export const resources = {
-  accounts: 'account', contacts: 'contact', invoices: 'invoice', products: 'product', bills: 'bill',
+  accounts: 'account', accountGroups: 'accountGroup', accountNatures: 'accountNature', contacts: 'contact', contactPersons: 'contactPerson', invoices: 'invoice', products: 'product', bills: 'bill',
   bankPayments: 'bankPayment', bankLines: 'bankLine', bankLineMatches: 'bankLineMatch', bankLineSubjectAssociations: 'bankLineSubjectAssociation',
-  daybooks: 'daybook', daybookTransactions: 'daybookTransaction', postings: 'posting', taxRates: 'taxRate',
+  daybooks: 'daybook', daybookTransactions: 'daybookTransaction', postings: 'posting', taxRates: 'taxRate', salesTaxRulesets: 'salesTaxRuleset',
   attachments: 'attachment', files: 'file', salesTaxReturns: 'salesTaxReturn', transactions: 'transaction',
 } as const;
 export type Resource = keyof typeof resources;
@@ -86,4 +86,8 @@ export class BillyClient {
     return this.request(recordId ? 'PUT' : 'POST', `/${resource}${recordId ? `/${id(recordId)}` : ''}`, {[resources[resource]]: payload});
   }
   async upload(bytes: Uint8Array, name: string, mime: string) {return this.request('POST', '/files', undefined, {bytes, name, mime});}
+  // Billy documents invoice email delivery as this dedicated action, not an invoice update.
+  async sendInvoiceEmail(invoiceId:string, contactPersonId:string, emailSubject:string, emailBody:string) {
+    return this.request('POST', `/invoices/${id(invoiceId)}/emails`, {email:{contactPersonId:id(contactPersonId),emailSubject,emailBody}});
+  }
 }

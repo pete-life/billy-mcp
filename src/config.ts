@@ -2,11 +2,13 @@ import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { BillyClient } from './client.js';
-export interface Config { token: string; organizationId: string; dataDir: string; inbox: string; writes: boolean; bankMatching: boolean }
+export interface Config { token: string; organizationId: string; dataDir: string; inbox: string; writes: boolean; bankMatching: boolean; approvalMode?: 'confirm'|'trusted_automation' }
 export function config(env = process.env): Config {
+  const approvalMode=env.BILLY_APPROVAL_MODE||'confirm';
+  if(approvalMode!=='confirm'&&approvalMode!=='trusted_automation')throw new Error('BILLY_APPROVAL_MODE must be confirm or trusted_automation');
   const dataDir = resolve(env.BILLY_DATA_DIR || `${homedir()}/.local/share/billy-mcp`);
   return {token: env.BILLY_ACCESS_TOKEN || '', organizationId: env.BILLY_ORGANIZATION_ID || '', dataDir,
-    inbox: resolve(env.BILLY_RECEIPT_INBOX || `${dataDir}/inbox`), writes: env.BILLY_ALLOW_WRITES === 'true', bankMatching: env.BILLY_ALLOW_BANK_MATCHING === 'true'};
+    inbox: resolve(env.BILLY_RECEIPT_INBOX || `${dataDir}/inbox`), writes: env.BILLY_ALLOW_WRITES === 'true', bankMatching: env.BILLY_ALLOW_BANK_MATCHING === 'true',approvalMode};
 }
 export function loadLocalConfig(): Config {
   const path=resolve(config().dataDir,'credentials.env');
