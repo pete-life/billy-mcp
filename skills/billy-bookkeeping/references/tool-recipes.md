@@ -15,7 +15,7 @@ Use the selected operation only. Parameter names below match the tested local se
 | `billy_get` | `{"resource":"bills","id":"<existing bill ID>","include":"bill.lines:embed"}` |
 | `billy_period_overview` | `{"start":"YYYY-MM-DD","end":"YYYY-MM-DD"}` |
 
-There is no companyId parameter on these tools. Reporting and learning-log writes use ordinary output/local file tools, not invented Billy tools. For a task about an already-completed run, only inspect existing evidence and save learning; never create a new receipt or financial plan.
+Version 0.2 lists return `{records,count,complete}` and individual reads return `{record,complete}`. `billy_journal` returns `{plans,count,limit,completeWithinLimit}`; receipts and vendors retain their named arrays. Access those wrappers before selecting IDs. Use `verbose:true` when compact output lacks a needed field. Plans expose `id` and `hash`, not a `planId` field; map them to `planId` and `expectedHash` for execute. There is no companyId parameter on these tools. Reporting and learning-log writes use ordinary output/local file tools, not invented Billy tools. For a task about an already-completed run, only inspect existing evidence and save learning; never create a new receipt or financial plan.
 
 ## Collect originals
 
@@ -89,7 +89,7 @@ Numbers illustrate the known test; replace them with the actual document. Regist
 
 With `incl`, line amounts sum to gross; with `excl`, they sum to net. Do not mix them. Use separate lines only when their accounting/tax split is evidenced. Call execute on the exact returned plan; record the resulting bill ID.
 4. `billy_get {resource:'bills',id:<bill ID>,include:'bill.lines:embed'}`. Verify draft, date, supplier, invoice number, currency, each line's account/tax ID, amount/net, tax and grossAmount. Then `billy_list {resource:'attachments',filters:{ownerReference:'bill:<bill ID>'}}` and verify the original attachment ID. The owner filter uses **ownerReference**, not ownerId.
-5. If those facts match and approval is in the existing user scope, prepare `{kind:'approve',resource:'bills',id:<bill ID>}`, then execute its returned plan ID/hash. No repeat authorization question for an already-authorized single-booking request.
+5. If those facts match and approval is in the existing user scope, prepare `{kind:'approve',resource:'bills',id:<bill ID>}`, then execute its returned plan ID/hash. Do not ask redundant chat permission when already authorized; the configured MCP approval form is still required in confirm mode. Use a typed purchase batch to authorize the whole known flow once.
 6. Read the bill and attachments again. Expected: approved with correct totals and original attachment. To check ledger: list postings for the invoice date; look up their transactions and select `originatorReference === 'bill:<bill ID>'`. Confirm the relevant debits and credits balance. Do not assume a transaction ID exists directly on the bill.
 7. Leave payment separate. An approved supplier invoice with balance > 0 is booked and unpaid, not bank-reconciled.
 
@@ -128,6 +128,6 @@ The server sends Billy's documented cashExchangeRate, verifies the association's
 
 If the active MCP session exposes the old schema, reconnect to the updated server. Never omit FX evidence to pass an older tool schema.
 
-## Other operations
+## Additional operations
 
-For payment/reconciliation outside the verified recipe above, read-only preparation is possible with current tool schemas. Do not execute a capability marked unverified in the deployment profile on a cheap worker's own initiative. The first live test is a separate explicitly authorized engineering task. Tax-coded journals, foreign-currency payments outside the full supplier-settlement recipe and grouped/partial bank matches are currently unsupported. Do not emulate them through a different write tool.
+Read [v02-operations.md](v02-operations.md) for typed purchase batches, sales invoices, credit notes, partial FX, fees and report recipes. The older full FX recipe above states its own live-tested scope; the additional v0.2 paths are fixture tested. A first live test of an unverified deployment capability requires an explicitly authorized acceptance case. Tax-coded journal expansion and grouped/split bank matches remain outside verified support. Do not emulate unsupported operations through a different writer.

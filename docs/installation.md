@@ -43,3 +43,9 @@ The command copies to a `billy-bookkeeping` subdirectory and refuses to overwrit
 Local stdio support does not make the server a hosted ChatGPT Work connector or plugin. A client must be able to start a local process and access its local files. Your model provider may receive the accounting data your agent sends it; “local server” describes where the MCP process and files run, not where the model runs.
 
 Writes and bank matching are off by default. Enabling them in the local profile only makes those capabilities available; each accounting action still needs its own reviewed scope. An uncertain write requires inspecting Billy and using the interactive `billy-mcp recover PLAN_ID applied|not_applied` command with concrete evidence. See [supported operations and limits](../README.md#supported-operations) before use.
+
+## Give this to your agent
+
+> Install the local Billy MCP from https://github.com/pete-life/billy-mcp and its bundled billy-bookkeeping skill. Check the release and Node requirements first. Until the scoped npm release exists, build the repository. Configure my client's local stdio connection without overwriting unrelated settings. Guide me through entering my own Billy API token in the hidden local setup prompt, then verify the company using read-only calls. Keep financial writes disabled until I enable them. Explain whether my client supports the default approval form. Receipt collection should use my existing mail/file tools and vendor billing accounts. Do not put my credentials or company records in chat or the repository.
+
+For execution approval and durable multi-invoice work, read [client approval and purchase batches](batches.md). A client without MCP form elicitation cannot use default financial execution; an operator may explicitly configure `BILLY_APPROVAL_MODE=trusted_automation` for previously authorized automation. An agent should not change that choice merely to bypass a declined or unsupported approval request.

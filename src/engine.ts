@@ -347,7 +347,7 @@ export class Engine {
     const existing=this.store.plan(planId);
     if(existing.hash!==hash)throw new Error('Plan hash mismatch');
     if(existing.status==='completed')return existing; // Retries return stored evidence, never repeat HTTP writes.
-    const plan=(this.store.claim as (id:string,hash:string,lease?:BatchLease)=>Plan)(planId,hash,batchLease);
+    const plan=this.store.claim(planId,hash,batchLease);
     let sent=false,successfulWrites=0;
     try {
       const op=operation.parse(plan.operation), snapshots=await this.inspect(op);

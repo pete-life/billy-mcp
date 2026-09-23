@@ -12,7 +12,8 @@ const common=['id','organizationId','name','entryDate','dueDate','createdTime','
   'text','source','reference','countryId','registrationNo','vatNo','isSupplier','isCustomer','isPaymentEnabled',
   'predefinedTag','abbreviation','isActive','appliesToSales','appliesToPurchases','salesTaxRulesetId','productId',
   'cashAmount','cashSide','cashAccountId','cashExchangeRate','subjectCurrencyId','feeAmount','feeAccountId','sentState',
-  'creditedInvoiceId','creditedBillId','portalUrl','accountLabel'] as const;
+  'creditedInvoiceId','creditedBillId','portalUrl','accountLabel','baseCurrencyId','baseAmount',
+  'originatorReference','isApproved','isVoid','contactPersonId','email'] as const;
 const blockedKey=/password|passphrase|secret|token|credential|apiKey|accessCode|authorization|cookie|session|signed|downloadUrl|fileUrl/i;
 function unsafeUrl(value:string){
   try{const url=new URL(value);return Boolean(url.username||url.password||url.search||url.hash||/(?:token|secret|accesscode|signed|signature)[=/]/i.test(url.pathname));}
@@ -65,7 +66,7 @@ export function presentGet(resource:Resource,record:RecordData,verbose=false,inc
 export function presentStatus(status:RecordData,verbose=false){
   if(verbose)return safeValue(status);
   return {tokenConfigured:status.tokenConfigured,organizationId:status.organizationId,writesEnabled:status.writesEnabled,
-    bankMatchingEnabled:status.bankMatchingEnabled,receiptInbox:status.receiptInbox,dataDirectory:status.dataDirectory,
+    bankMatchingEnabled:status.bankMatchingEnabled,approvalMode:status.approvalMode,receiptInbox:status.receiptInbox,dataDirectory:status.dataDirectory,
     organization:status.organization?compactRecord(status.organization):undefined};
 }
 export function presentOverview(overview:RecordData,verbose=false){

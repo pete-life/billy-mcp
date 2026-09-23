@@ -6,7 +6,7 @@ import {BillyClient,resources,type Resource} from './client.js';
 import {Store} from './store.js';
 import {Engine} from './engine.js';
 import {Reports} from './reports.js';
-import {presentGet,presentList,presentOverview,presentPlan,presentStatus,compactRecord,safeValue} from './presentation.js';
+import {presentGet,presentList,presentOverview,presentPlan,presentStatus,compactRecord,safeValue,sanitizeText} from './presentation.js';
 import {ApprovalGate} from './approval.js';
 import {BatchManager,purchaseBatch} from './batches.js';
 import {date,identifier,operation,receiptMetadata,sanitizeSource,source} from './schemas.js';
@@ -23,7 +23,7 @@ const filters:Record<Resource,string[]>={
   bankPayments:[],bankLineMatches:[],bankLineSubjectAssociations:[],daybooks:[],taxRates:[],salesTaxRulesets:[],files:[],salesTaxReturns:[],transactions:[],products:['isArchived'],
 };
 export function createServer(config:Config,client=new BillyClient(config.token,config.organizationId),store=new Store(config.dataDir,config.inbox,config.organizationId)) {
-  const server=new McpServer({name:'billy-mcp',version:'0.1.1'});
+  const server=new McpServer({name:'billy-mcp',version:JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8')).version});
   const engine=new Engine(client,store,config);
   const reports=new Reports(client);
   const approvalGate=new ApprovalGate(config,server);
@@ -33,12 +33,12 @@ export function createServer(config:Config,client=new BillyClient(config.token,c
       try{
         if(name!=='billy_status'&&!config.organizationId)throw new Error('Connect a company API token first; organization is discovered automatically at startup.');
         const result=await handler(args);
-        return {content:[{type:'text' as const,text:JSON.stringify(result,null,2)}]};
-      }catch(e){return {isError:true,content:[{type:'text' as const,text:e instanceof Error?e.message:'Operation failed'}]};}
+        return {content:[{type:'text' as const,text:JSON.stringify(safeValue(result),null,2)}]};
+      }catch(e){return {isError:true,content:[{type:'text' as const,text:e instanceof Error?sanitizeText(e.message):'Operation failed'}]};}
     });
   }
   tool('billy_status','Configuration and connection status. Never exposes credentials.',{verbose:z.boolean().default(false)},false,async({verbose})=>{
-    const status={tokenConfigured:Boolean(config.token),organizationId:config.organizationId||null,writesEnabled:config.writes,bankMatchingEnabled:config.bankMatching,receiptInbox:config.inbox,dataDirectory:config.dataDir};
+    const status={tokenConfigured:Boolean(config.token),organizationId:config.organizationId||null,writesEnabled:config.writes,bankMatchingEnabled:config.bankMatching,approvalMode:config.approvalMode||'confirm',receiptInbox:config.inbox,dataDirectory:config.dataDir};
     return presentStatus(config.token&&config.organizationId?{...status,organization:await client.verifyOrganization()}:status,verbose);
   });
   tool('billy_list','List every page of a Billy resource. Default response is compact and complete; verbose returns sanitized detail. Unknown filters are rejected.',{
@@ -86,19 +86,19 @@ export function createServer(config:Config,client=new BillyClient(config.token,c
     const vendors=store.vendors();return {count:vendors.length,complete:true,vendors:verbose?safeValue(vendors):vendors.map(compactRecord)};
   });
   tool('billy_prepare','Validate and persist a concrete write proposal without modifying Billy. Review the returned operation, reason, ID and hash. Receipts must be uploaded before preparing a booking. Reconciliation is restricted to matching existing bank-account postings.',{
-    operation,reason:z.string().min(10).max(2000),
-  },true,({operation:op,reason})=>engine.prepare(op,reason));
+    operation,reason:z.string().min(10).max(2000),verbose:z.boolean().default(false),
+  },true,async({operation:op,reason,verbose})=>presentPlan(await engine.prepare(op,reason),verbose));
   tool('billy_plan','Inspect a saved proposal and its execution evidence. Default output retains operation, hash and snapshot hashes.',{planId:z.uuid(),verbose:z.boolean().default(false)},false,({planId,verbose})=>presentPlan(store.plan(planId),verbose));
-  tool('billy_refresh_plan','Refresh an unexecuted/rejected proposal after changed data or expiry; review it again before execution.',{planId:z.uuid()},true,({planId})=>engine.refresh(planId));
+  tool('billy_refresh_plan','Refresh an unexecuted/rejected proposal after changed data or expiry; review it again before execution.',{planId:z.uuid(),verbose:z.boolean().default(false)},true,async({planId,verbose})=>presentPlan(await engine.refresh(planId),verbose));
   tool('billy_execute','Execute the exact reviewed proposal once. Default approval uses the MCP client form; a supplied authorization note is only an audit assertion. Unknown outcomes block further writes.',{
     planId:z.uuid(),expectedHash:z.string().regex(/^[a-f0-9]{64}$/),authorization:z.string().min(10).max(1000),
   },true,async({planId,expectedHash,authorization})=>{
     const plan=store.plan(planId);
     if(plan.hash!==expectedHash)throw new Error('Plan hash mismatch');
-    if(plan.status==='completed')return plan;
-    await approvalGate.authorize({companyId:config.organizationId,hash:expectedHash,details:{operation:plan.operation,reason:plan.reason},authorization});
-    store.event(planId,`authorization: ${authorization}`);
-    return engine.execute(planId,expectedHash);
+    if(plan.status==='completed')return presentPlan(plan);
+    const approval=await approvalGate.authorize({companyId:config.organizationId,hash:expectedHash,details:{operation:plan.operation,reason:plan.reason},authorization});
+    store.event(planId,`approval: ${JSON.stringify(approval)}; authorization: ${authorization}`);
+    return presentPlan(await engine.execute(planId,expectedHash));
   });
   tool('billy_batch_prepare','Preflight and save an ordered purchase batch (1-10 cases). Each case binds an original receipt, exact draft lines and explicit approval/payment/reconciliation stages. No Billy writes.',
     {cases:purchaseBatch.shape.cases,reason:purchaseBatch.shape.reason},true,args=>batches.prepare(args));

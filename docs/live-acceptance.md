@@ -14,3 +14,9 @@ No private invoices, company profile, record identifiers or acceptance payloads 
 Vendor-portal downloads rely on the calling agent's tools and have not been covered by a universal integration test. Other tax patterns, tax-coded journals, grouped/partial foreign settlements, explicit payment fees, refunds and foreign sales-invoice payments are outside the verified scope.
 
 For a new deployment, first verify company identity and read-only records. Enable writes only for a concrete authorized case. After execution, verify the original attachment, amounts, currency, tax treatment and ledger. Distinguish approved, paid and bank-reconciled states. Never use live transactions merely to test documentation changes.
+
+## Version 0.2 evidence
+
+On 2026-09-23, all four new reports (trial balance, profit/loss, period expenses and current outstanding documents) completed against a connected Billy company through a GET-only transport. The full trial balance balanced. No private values or record IDs are included here. Synthetic tests separately cover ignored filters, pagination, credit-note separation and missing FX base amounts.
+
+The newly added sales draft/send, customer/supplier credit-note, partial FX and explicit-fee paths remain fixture tested. MCP form acceptance/decline and the dependency-aware batch flow have synthetic integration tests. Those tests are not live financial acceptance. The packaged tarball is also installed in a fresh temporary directory and initialized through real MCP stdio without credentials.
