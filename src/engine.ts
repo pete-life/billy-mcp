@@ -173,7 +173,11 @@ export class Engine {
         if(!Number.isFinite(Number(original.amount))||!Number.isFinite(Number(original.tax)))throw new Error('Original bill totals are unavailable');
         const attachment=await get('attachments',r.attachmentId!);
         if(attachment.ownerReference)throw new Error('Supplier credit document already belongs to another Billy record');
-        const duplicate=(await this.client.list('bills',{suppliersInvoiceNo:r.metadata.invoiceNumber})).some(b=>b.contactId===original.contactId&&normalize(b.suppliersInvoiceNo)===normalize(r.metadata.invoiceNumber));
+        const contacts=await this.client.list('contacts');
+        const aliases=new Set(contacts.filter(candidate=>normalize(candidate.name)===normalize(contact.name)||
+          (contact.registrationNo&&candidate.registrationNo===contact.registrationNo)).map(candidate=>candidate.id));
+        aliases.add(original.contactId);
+        const duplicate=(await this.client.list('bills',{suppliersInvoiceNo:r.metadata.invoiceNumber})).some(b=>aliases.has(b.contactId)&&normalize(b.suppliersInvoiceNo)===normalize(r.metadata.invoiceNumber));
         if(duplicate)throw new Error('Supplier credit document number already exists');
         const prior=(await this.client.list('bills',{creditedBillId:op.originalBillId})).filter(b=>b.creditedBillId===op.originalBillId&&b.state!=='voided');
         const priorDetails=[] as RecordData[];
