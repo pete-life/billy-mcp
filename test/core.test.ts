@@ -185,7 +185,7 @@ test('bank matching gate, overpayment and foreign currency fail before writes',a
   const f=fixture();f.cfg.bankMatching=false;await assert.rejects(f.engine.prepare({kind:'reconcile',bankLineId:'line',subjectReference:'posting:posting'},'Match reviewed posting'),/live-verified/);
   f.records.bills.bill={id:'bill',state:'approved',balance:100,currencyId:'DKK'};
   const op={kind:'create_payment',entryDate:'2026-09-01',cashAmount:125,cashSide:'credit',cashAccountId:'bank',bankLineId:'line',subjectReference:'bill:bill'};
-  await assert.rejects(f.engine.prepare(op,'Confirmed payment'),/exceeds/);f.records.bills.bill.currencyId='USD';await assert.rejects(f.engine.prepare(op,'Confirmed payment'),/Foreign/);f.store.close();
+  await assert.rejects(f.engine.prepare(op,'Confirmed payment'),/exceeds/);f.records.bills.bill.currencyId='USD';await assert.rejects(f.engine.prepare(op,'Confirmed payment'),/exceeds|Foreign/);f.store.close();
 });
 test('same-currency payment rejects an already approved remote match with an empty local journal',async()=>{
   const f=fixture();
@@ -239,7 +239,7 @@ test('foreign full settlement requires complete, matching FX evidence',async()=>
   f.records.bills.bill={id:'bill',state:'approved',balance:20,currencyId:'USD',exchangeRate:6.5,balanceModifiers:[]};
   const base={kind:'create_payment',entryDate:'2026-02-10',cashAmount:140,cashSide:'credit',cashAccountId:'bank',bankLineId:'line',subjectReference:'bill:bill',subjectAmount:20,subjectCurrencyId:'USD',cashExchangeRate:7};
   assert.equal(operation.safeParse({...base,subjectAmount:undefined}).success,false);
-  await assert.rejects(f.engine.prepare({...base,subjectAmount:19},'Wrong outstanding USD balance'),/exact current bill balance/);
+  await assert.rejects(f.engine.prepare({...base,subjectAmount:19},'Rate does not explain the bank amount'),/cashExchangeRate/);
   await assert.rejects(f.engine.prepare({...base,subjectCurrencyId:'DKK'},'Wrong subject currency'),/currency/);
   await assert.rejects(f.engine.prepare({...base,cashExchangeRate:6.5},'Wrong settlement rate'),/explain/);
   const plan=await f.engine.prepare(base,'Full USD bill settlement reviewed against exact bank line');

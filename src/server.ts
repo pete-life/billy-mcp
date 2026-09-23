@@ -9,14 +9,14 @@ import {date,identifier,operation,receiptMetadata,sanitizeSource,source} from '.
 import type {Config} from './config.js';
 
 const filters:Record<Resource,string[]>={
-  accounts:['isBankAccount','isArchived','systemRole'], contacts:['isCustomer','isSupplier'],
+  accounts:['isBankAccount','isArchived','systemRole'], accountGroups:[],accountNatures:[],contacts:['isCustomer','isSupplier'],contactPersons:[],
   invoices:['contactId','state','isPaid','minEntryDate','maxEntryDate','invoiceNo','currencyId','q'],
   bills:['contactId','state','isPaid','minEntryDate','maxEntryDate','hasAttachments','suppliersInvoiceNo','currencyId','q'],
   bankLines:['accountId','isReconciled','status','side','receiptState','minEntryDate','maxEntryDate','minAmount','maxAmount','q'],
   postings:['accountId','transactionId','minEntryDate','maxEntryDate','isVoided','isBankMatched','q'],
   attachments:['ownerReference','unhandled','type','supplier','amount','isDuplicate','q'],
   daybookTransactions:['daybookId','state','minEntryDate','maxEntryDate','q'],
-  bankPayments:[],bankLineMatches:[],bankLineSubjectAssociations:[],daybooks:[],taxRates:[],files:[],salesTaxReturns:[],transactions:[],products:['isArchived'],
+  bankPayments:[],bankLineMatches:[],bankLineSubjectAssociations:[],daybooks:[],taxRates:[],salesTaxRulesets:[],files:[],salesTaxReturns:[],transactions:[],products:['isArchived'],
 };
 export function createServer(config:Config,client=new BillyClient(config.token,config.organizationId),store=new Store(config.dataDir,config.inbox,config.organizationId)) {
   const server=new McpServer({name:'billy-mcp',version:'0.1.1'});
