@@ -88,11 +88,17 @@ function approvedIdentity(record:RecordData,resource:Resource) {
     lines:record.lines.map((line:RecordData)=>Object.fromEntries(lineFields.map(key=>[key,line[key]])))
       .sort((a:RecordData,b:RecordData)=>String(a.id??'').localeCompare(String(b.id??'')))};
 }
+function validateCreditAmounts(credit:RecordData) {
+  const nonnegative=(value:unknown)=>typeof value==='number'&&Number.isFinite(value)&&value>=0;
+  if(!nonnegative(credit.amount)||!nonnegative(credit.tax)||!Array.isArray(credit.lines)||
+    credit.lines.some((line:RecordData)=>!nonnegative(line.amount)||!nonnegative(line.tax)))throw new Error('Credit amounts must be nonnegative; signed or missing credit evidence cannot offset credit limits');
+}
 function validateCustomerCreditPortfolio(original:RecordData,credits:RecordData[]) {
   if(original.state!=='approved'||original.type!=='invoice'||!Array.isArray(original.lines)||!Number.isFinite(Number(original.amount))||!Number.isFinite(Number(original.tax)))throw new Error('Original customer invoice is not inspectable for credit approval');
   let net=0,tax=0;
   const quantity=new Map<string,number>(),gross=new Map<string,number>();
   for(const credit of credits){
+    validateCreditAmounts(credit);
     if(credit.type!=='creditNote'||credit.contactId!==original.contactId||currencyOf(credit)!==currencyOf(original)||!Array.isArray(credit.lines)||
       !Number.isFinite(Number(credit.amount))||!Number.isFinite(Number(credit.tax)))throw new Error('Linked customer credit is not inspectable');
     net+=cents(Number(credit.amount));tax+=cents(Number(credit.tax));
@@ -116,6 +122,7 @@ function validateSupplierCreditPortfolio(original:RecordData,credits:RecordData[
   let net=0,tax=0;
   const gross=new Map<string,number>();
   for(const credit of credits){
+    validateCreditAmounts(credit);
     if(credit.type!=='creditNote'||credit.contactId!==original.contactId||currencyOf(credit)!==currencyOf(original)||credit.taxMode!==original.taxMode||
       !Array.isArray(credit.lines)||!Number.isFinite(Number(credit.amount))||!Number.isFinite(Number(credit.tax)))throw new Error('Linked supplier credit is not inspectable');
     net+=cents(Number(credit.amount));tax+=cents(Number(credit.tax));

@@ -380,3 +380,22 @@ test('unexpected fee on a no-fee payment is an unknown write',async()=>{
     assert.equal(f.store.plan(plan.id).status,'unknown');
   }finally{f.store.close();}
 });
+
+
+test('negative linked supplier credits cannot offset an excessive positive credit at approval',async()=>{
+  const f=fixture(),receipt=f.supplierCreditReceipt();
+  receipt.metadata={...receipt.metadata,netAmount:150,vatAmount:37.5,totalAmount:187.5};f.store.saveReceipt(receipt);
+  f.records.contacts.supplier={id:'supplier',name:'Supplier Ltd',isSupplier:true};
+  f.records.attachments[receipt.attachmentId!].ownerReference='bill:target';
+  f.records.bills.original={id:'original',type:'bill',state:'approved',contactId:'supplier',currencyId:'DKK',taxMode:'excl',suppliersInvoiceNo:'PUR-1',amount:100,tax:25,
+    lines:[{id:'original-line',accountId:'expense',taxRateId:'vat',amount:100,tax:25}]};
+  // Negative sibling first used to lower cumulative caps before the target.
+  f.records.bills.negative={id:'negative',type:'creditNote',state:'approved',creditedBillId:'original',contactId:'supplier',currencyId:'DKK',taxMode:'excl',amount:-50,tax:-12.5,
+    lines:[{id:'negative-line',accountId:'expense',taxRateId:'vat',amount:-50,tax:-12.5}]};
+  f.records.bills.target={id:'target',type:'creditNote',state:'draft',creditedBillId:'original',contactId:'supplier',currencyId:'DKK',taxMode:'excl',amount:150,tax:37.5,
+    entryDate:'2026-09-02',suppliersInvoiceNo:'CN-1',lines:[{id:'target-line',accountId:'expense',taxRateId:'vat',amount:150,tax:37.5}]};
+  try{
+    await assert.rejects(f.engine.prepare({kind:'approve',resource:'bills',id:'target'},'Review excessive credit with negative sibling'),/must be nonnegative/);
+    assert.equal(f.calls.filter(call=>call.method!=='GET').length,0);
+  }finally{f.store.close();}
+});

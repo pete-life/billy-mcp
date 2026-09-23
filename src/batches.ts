@@ -30,8 +30,8 @@ function materialRecord(resource:string,record:any){
 function billFinancial(record:any){
   if(!record||typeof record.id!=='string'||!Array.isArray(record.lines)||!record.lines.length||!Number.isFinite(Number(record.amount))||!Number.isFinite(Number(record.tax)))throw new Error('Bill financial identity or embedded lines are unavailable; approval stopped');
   const lines=record.lines.map((line:any)=>{
-    if(typeof line.accountId!=='string'||typeof line.taxRateId!=='string'||typeof line.description!=='string'||!Number.isFinite(Number(line.amount)))throw new Error('Bill line identity is incomplete; approval stopped');
-    return {accountId:line.accountId,taxRateId:line.taxRateId,description:line.description,amountCents:cents(Number(line.amount))};
+    if(typeof line.accountId!=='string'||typeof line.taxRateId!=='string'||typeof line.description!=='string'||!Number.isFinite(Number(line.amount))||!Number.isFinite(Number(line.tax)))throw new Error('Bill line identity is incomplete; approval stopped');
+    return {accountId:line.accountId,taxRateId:line.taxRateId,description:line.description,amountCents:cents(Number(line.amount)),taxCents:cents(Number(line.tax))};
   }).sort((a:any,b:any)=>canonical(a).localeCompare(canonical(b)));
   return {id:record.id,contactId:record.contactId,entryDate:record.entryDate,currencyId:record.currencyId,suppliersInvoiceNo:record.suppliersInvoiceNo,taxMode:record.taxMode,amountCents:cents(Number(record.amount)),taxCents:cents(Number(record.tax)),lines};
 }
@@ -148,8 +148,7 @@ export class BatchManager {
     }
     if(plan.status!=='prepared')throw new Error(`Batch stage ${key} is ${plan.status}; inspect Billy and the journal before continuing.`);
     validatePlan?.(plan);
-    const executor=this.engine as Engine & {execute(planId:string,hash:string,batchLease?:BatchLease):Promise<any>};
-    const result=await executor.execute(plan.id,plan.hash,lease);
+    const result=await this.engine.execute(plan.id,plan.hash,lease);
     this.store.saveBatchStage(lease,key,{planId:plan.id,hash:plan.hash,status:'completed'});
     return result;
   }
@@ -180,7 +179,8 @@ export class BatchManager {
         const created=billFinancial(billPlan.result);
         const metadata=this.store.receipt(item.receiptId).metadata;
         const expectedLines=item.bill.lines.map(line=>({accountId:line.accountId,taxRateId:line.taxRateId,description:line.description,amountCents:cents(line.amount)})).sort((a,b)=>canonical(a).localeCompare(canonical(b)));
-        if(created.contactId!==item.bill.contactId||created.entryDate!==item.bill.entryDate||created.currencyId!==item.bill.currencyId||created.suppliersInvoiceNo!==item.bill.suppliersInvoiceNo||created.taxMode!==item.bill.taxMode||created.amountCents!==cents(metadata.netAmount)||created.taxCents!==cents(metadata.vatAmount)||digest(created.lines)!==digest(expectedLines))throw new Error('Created bill financial identity differs from the approved purchase case');
+        const enteredLines=created.lines.map(({taxCents,...line}:any)=>({...line,amountCents:line.amountCents+(item.bill.taxMode==='incl'?taxCents:0)})).sort((a:any,b:any)=>canonical(a).localeCompare(canonical(b)));
+        if(created.contactId!==item.bill.contactId||created.entryDate!==item.bill.entryDate||created.currencyId!==item.bill.currencyId||created.suppliersInvoiceNo!==item.bill.suppliersInvoiceNo||created.taxMode!==item.bill.taxMode||created.amountCents!==cents(metadata.netAmount)||created.taxCents!==cents(metadata.vatAmount)||digest(enteredLines)!==digest(expectedLines))throw new Error('Created bill financial identity differs from the approved purchase case');
         await this.verifyPending(this.store.batch(batchId));
         if(item.approve)await this.stage(lease,`${i}:approve`,{kind:'approve',resource:'bills',id:billId},reason,plan=>{
           const snapshot=plan.snapshots.find((entry:any)=>entry.resource==='bills'&&entry.id===billId);
@@ -191,8 +191,7 @@ export class BatchManager {
           const paymentPlan=await this.stage(lease,`${i}:payment`,{kind:'create_payment',...item.payment,subjectReference:`bill:${billId}`},reason);
           if(item.reconcile){
             await this.verifyPending(this.store.batch(batchId));
-            const resolver=this.engine as Engine & {resolvePaymentCashPosting(planId:string):Promise<{postingId:string;paymentId:string;bankLineId:string}>};
-            const {postingId,bankLineId}=await resolver.resolvePaymentCashPosting(paymentPlan.id);
+            const {postingId,bankLineId}=await this.engine.resolvePaymentCashPosting(paymentPlan.id);
             if(bankLineId!==item.payment.bankLineId)throw new Error('Payment posting resolver returned a different bank line');
             await this.stage(lease,`${i}:reconcile`,{kind:'reconcile',bankLineId,subjectReference:`posting:${postingId}`},reason);
           }

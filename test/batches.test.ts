@@ -56,7 +56,7 @@ function fixture(bankMatching=false){
       result={receiptId:receipt.id,attachment:{id:receipt.attachmentId}};
     }
     if(op.kind==='create_bill'){
-      result={...op,id:`bill-${op.suppliersInvoiceNo}`,state:'draft',amount:100,tax:25};
+      result={...op,id:`bill-${op.suppliersInvoiceNo}`,state:'draft',amount:100,tax:25,lines:op.lines.map((line:any)=>({...line,amount:100,tax:25}))};
       billRecords[result.id]=structuredClone(result);
     }
     const done=store.finish(planId,'completed',result);afterWrite(op);return done;
@@ -232,7 +232,7 @@ test('company batch lease atomically excludes separate plans and can be reclaime
     f.store.finishBatch(reclaimed,'paused');
   }finally{f.close();}
 });
-test('real Engine runs a bundled purchase through its guarded plan claims',async()=>{
+for(const taxMode of ['excl','incl'] as const)test(`real Engine runs a ${taxMode}-tax purchase batch through its guarded plan claims`,async()=>{
   const root=mkdtempSync(join(tmpdir(),'billy-real-batch-')),inbox=join(root,'inbox');
   const store=new Store(root,inbox,'fixture-company');
   const cfg:Config={token:'fixture-token',organizationId:'fixture-company',dataDir:root,inbox,writes:true,bankMatching:false,approvalMode:'trusted_automation'};
@@ -264,7 +264,7 @@ test('real Engine runs a bundled purchase through its guarded plan claims',async
     }
     const body=JSON.parse(String(init!.body)),single=resources[resource as Resource],payload=body[single];
     const record={...(key?data[resource!]![key]:{}),...payload,id:key||'bill-1'};
-    if(resource==='bills'&&!key){record.amount=100;record.tax=25;data.attachments!.attachment.ownerReference='bill:bill-1';}
+    if(resource==='bills'&&!key){record.amount=100;record.tax=25;record.lines=record.lines.map((line:any)=>({...line,amount:100,tax:25}));data.attachments!.attachment.ownerReference='bill:bill-1';}
     data[resource!]![record.id]=record;
     return Response.json({[resource!]:[record]});
   };
@@ -274,7 +274,7 @@ test('real Engine runs a bundled purchase through its guarded plan claims',async
     const manager=new BatchManager(client,engine,store,approval);
     const path=join(inbox,'original.pdf');writeFileSync(path,'%PDF-1.4\nfixture invoice\n%%EOF');
     const receipt=store.importReceipt(path,{kind:'local',reference:'fixture-original'},{supplier:'Vendor Ltd',invoiceNumber:'INV-1',invoiceDate:'2026-09-20',currencyId:'DKK',netAmount:100,vatAmount:25,totalAmount:125});
-    const spec={reason:'Fixture purchase with a verified receipt',cases:[{receiptId:receipt.id,bill:{contactId:'supplier',entryDate:'2026-09-20',currencyId:'DKK',suppliersInvoiceNo:'INV-1',taxMode:'excl',lines:[{accountId:'expense',taxRateId:'vat',description:'Fixture service',amount:100}]},approve:true,reconcile:false}]};
+    const spec={reason:'Fixture purchase with a verified receipt',cases:[{receiptId:receipt.id,bill:{contactId:'supplier',entryDate:'2026-09-20',currencyId:'DKK',suppliersInvoiceNo:'INV-1',taxMode,lines:[{accountId:'expense',taxRateId:'vat',description:'Fixture service',amount:taxMode==='incl'?125:100}]},approve:true,reconcile:false}]};
     const batch=await manager.prepare(spec),done=await manager.execute(batch.id,batch.hash,'Fixture approval for exact purchase batch');
     assert.equal(done.status,'completed',JSON.stringify(done));
     assert.deepEqual(writes,['POST:files','POST:bills','PUT:bills/bill-1']);

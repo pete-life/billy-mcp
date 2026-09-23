@@ -22,7 +22,7 @@ Collect and import all originals first; validate each document and live supplier
 }
 ```
 
-The amount is illustrative. Supply actual evidence. `approve:false` stops at a draft. To record payment add `payment` containing the exact observed bank line's `bankLineId`, `entryDate`, `cashAccountId`, `cashSide` and `cashAmount`, plus any supported explicit FX evidence. Payment needs `approve:true`; reconciliation needs a payment and `reconcile:true`. Never add unrequested stages.
+The amount is illustrative. Supply actual evidence. `approve:false` stops at a draft. To record payment add `payment` containing the exact observed bank line's `bankLineId`, `entryDate`, `cashAccountId`, `cashSide` and `cashAmount`, plus any supported explicit FX or fee evidence. Payment needs `approve:true`; reconciliation needs a payment and `reconcile:true`. Never add unrequested stages.
 
 Inspect the returned full ordered `spec`, `id`, `hash` and evidence. Call `billy_batch_execute({batchId:id,expectedHash:hash,authorization:<factual user-scope note>})`. The configured client form approves the complete batch once. The server binds dependent bill and payment IDs itself, verifies each stage and records durable progress. It prevents another process from inserting writes while the batch is running.
 
@@ -48,7 +48,7 @@ Approval is separate. A credit note is not a refund, bank match or proof that th
 
 Use the ordinary exact-bank-line recipe. Same-currency partial payments reduce the balance by the verified subject amount and leave the remainder unpaid. For supported supplier FX payments, explicitly provide subjectAmount in the bill's currency, subjectCurrencyId and cashExchangeRate. The bank account must use the company's base currency. If cent rounding makes the original liability allocation ambiguous, preflight rejects it; report the exception without adjusting the evidence to fit.
 
-A evidenced fee uses feeAmount, feeAccountId and subjectAmount. Verify the fee from the bank/provider evidence; a currency difference alone is not a fee. Fee-bearing payments require a base-currency bank account. Supplier outflows include the fee in cashAmount; customer receipts are net of it. After execution, verify balance reduction, association and bank/liability/fee/FX postings. A partial payment never justifies reporting the invoice as fully paid.
+An evidenced fee uses feeAmount, feeAccountId and subjectAmount. Verify the fee from the bank/provider evidence; a currency difference alone is not a fee. Fee-bearing payments require a base-currency bank account. Supplier outflows include the fee in cashAmount; customer receipts are net of it. After execution, verify balance reduction, association and bank/liability/fee/FX postings. A partial payment never justifies reporting the invoice as fully paid.
 
 ## Reports
 

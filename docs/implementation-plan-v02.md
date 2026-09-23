@@ -1,6 +1,6 @@
 # v0.2 implementation and acceptance plan
 
-Status: in progress. Base: v0.1.1. All new accounting flows are tested against synthetic API fixtures; no production accounting mutations or outgoing invoice emails are part of implementation.
+Status: implemented and reviewed as a v0.2 release candidate. Base: v0.1.1. All new accounting flows are tested against synthetic API fixtures; no production accounting mutations or outgoing invoice emails are part of implementation.
 
 ## Scope and parallel work
 
@@ -39,10 +39,24 @@ Publication: prepare a reviewable branch/PR. npm upload is separate and requires
 
 ## Completion checklist
 
-- [ ] A installation and fresh-package proof
-- [ ] B compact responses and reports
-- [ ] C all supported new accounting operations, unsupported cases clearly identified
-- [ ] D approval and durable batch execution
-- [ ] Integrated tests and documentation
-- [ ] Coordinator final review and independent security/financial review
-- [ ] Reviewable release candidate with precise remaining dependencies
+- [x] A installation and fresh-package proof
+- [x] B compact responses and reports
+- [x] C all supported new accounting operations, unsupported cases clearly identified
+- [x] D approval and durable batch execution
+- [x] Integrated tests and documentation
+- [x] Coordinator final review and independent security/financial review
+- [x] Reviewable release candidate with precise remaining dependencies
+
+## Final coordinator review and evidence (2026-09-23)
+
+All four tracks were integrated. Implementation and independent reviewers used GPT-6 Sol at xhigh; the coordinator reviewed the combined source and resolved cross-track contracts.
+
+Review fixes include an immediate pre-payment subject snapshot check, original/sibling credit limits at approval, nonnegative credit evidence, exact created/approved bill lines, immutable sales-draft lines, and dependent batch approval bound to the created bill. The refreshed rejected-child path and partial-result output were corrected. Integration testing also caught inclusive-tax line amounts: batch comparison now matches Billy's net-plus-tax response to the reviewed gross input.
+
+- `npm run check`: **90/90 passing tests**, including real SDK form acceptance/decline, complete batch stages, process locking and unknown/recovery cases.
+- The actual npm tarball was installed in a fresh temporary directory, its packaged skill/documents verified, and the installed executable initialized over MCP stdio without credentials.
+- All four report paths completed using a GET-only live Billy transport; the full trial balance balanced. This read-only probe does not establish new financial-write acceptance.
+- Skill frontmatter validation and `git diff --check` passed. The public source and fixtures contain no private company markers or receipt evidence.
+- Both independent focused review rechecks cleared their original blocking findings. A further signed-credit cap case was closed with a nonnegative guard and a regression test; the final complete suite includes it.
+
+Remaining release dependencies: the scoped npm package is not published and this host has no npm publishing login. New sales, credit-note, partial-FX and fee writes still need separately authorized live acceptance. No production credential migration, live accounting write or email send was part of this implementation. Invoice line replacement, credit-note refund/application, grouped bank matches and remote API atomicity remain explicit unsupported cases.
