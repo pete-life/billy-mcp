@@ -1,7 +1,7 @@
 import {loadLocalConfig} from './config.js';
 import {BillyClient} from './client.js';
 const c=loadLocalConfig();
-if(!c.token){console.log('Missing BILLY_ACCESS_TOKEN. Create a company API token in Billy and save it using npm run setup. Do not paste it in chat.');process.exitCode=1;}
+if(!c.token){console.log('Missing BILLY_ACCESS_TOKEN. Create a company API token in Billy and save it using billy-mcp setup. Do not paste it in chat.');process.exitCode=1;}
 else {
   try {
     const client=new BillyClient(c.token,c.organizationId);
