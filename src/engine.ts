@@ -121,6 +121,13 @@ export class Engine {
         const bankLine=await get('bankLines',op.bankLineId);
         if(bankLine.accountId!==op.cashAccountId||bankLine.side!==op.cashSide||cents(bankLine.amount)!==cents(op.cashAmount)||bankLine.entryDate!==op.entryDate||bankLine.isReconciled)throw new Error('Payment must match an unreconciled bank line account, amount, direction and date');
         if(this.store.bankLineBooked(op.bankLineId))throw new Error('Payment or journal for this bank line was already executed');
+        if(!bankLine.matchId)throw new Error('Payment requires an exact bank-line match');
+        {
+          const match=await get('bankLineMatches',bankLine.matchId,'bankLineMatch.lines:embed,bankLineMatch.subjectAssociations:embed');
+          if(match.isApproved!==false||!Array.isArray(match.lines)||!Array.isArray(match.subjectAssociations))throw new Error('Payment requires one inspectable, unapproved bank-line match');
+          if(match.lines.length!==1||match.lines[0].id!==bankLine.id)throw new Error('Grouped bank matches require separate review; this payment handles one line');
+          if(match.subjectAssociations.length)throw new Error('Bank-line match already has subject associations; inspect in Billy before changing it');
+        }
         const ref=subject(op.subjectReference), s=await get(ref.resource,ref.id,subjectInclude(ref.resource));
         if(s.state!=='approved'||s.isPaid||!(Number(s.balance)>0))throw new Error('Subject must be approved and have an unpaid balance');
         if((ref.resource==='bills'?'credit':'debit')!==op.cashSide)throw new Error('Payment side does not match bill/invoice');
@@ -148,13 +155,6 @@ export class Engine {
           const match=roleAccounts.find(account=>account.systemRole===role&&!account.isArchived);
           if(!match)throw new Error(`Foreign-currency payment requires an active ${role} ledger account`);
           await account(match.id);
-        }
-        if(!bankLine.matchId)throw new Error('Foreign-currency payment requires an exact bank-line match');
-        {
-          const match=await get('bankLineMatches',bankLine.matchId,'bankLineMatch.lines:embed,bankLineMatch.subjectAssociations:embed');
-          if(match.isApproved||!Array.isArray(match.lines)||!Array.isArray(match.subjectAssociations))throw new Error('Foreign-currency payment requires one inspectable, unapproved bank-line match');
-          if(match.lines.length!==1||match.lines[0].id!==bankLine.id)throw new Error('Grouped bank matches require separate review; this payment handles one line');
-          if(match.subjectAssociations.length)throw new Error('Bank-line match already has subject associations; inspect in Billy before changing it');
         }
         break;
       }

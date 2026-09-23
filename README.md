@@ -69,7 +69,7 @@ The learning routine records evidence privately under the configured data direct
 - `create_bill`: create a **draft**, using an uploaded receipt, supplier, invoice date/number, currency, explicit tax mode and account/tax-coded lines. Supplier name and extracted totals must match.
 - `create_journal`: create a balanced **draft**, with receipt or explicit no-receipt reason plus bank-line identity. Tax-coded journal expansion is not live-verified; use a purchase bill for VAT-coded expenses.
 - `approve`: approve a reviewed bill, invoice or journal draft. Bills require attached evidence.
-- `create_payment`: register a same-currency bill/invoice payment or an explicitly evidenced full foreign-currency supplier-bill settlement from a base-currency bank account against an existing unpaid balance and an identified bank line. Equal instalments on separate bank lines remain separate operations. This is bookkeeping, not a bank transfer.
+- `create_payment`: register a same-currency bill/invoice payment or an explicitly evidenced full foreign-currency supplier-bill settlement from a base-currency bank account against an existing unpaid balance and an identified bank line. All payments require a live, explicitly unapproved single-line bank match without existing subject associations; this is rechecked before writing. Equal instalments on separate bank lines remain separate operations. This is bookkeeping, not a bank transfer.
 - `reconcile`: associate one bank line's existing match with an existing bank-account posting and approve it. No expense is created. This is separately gated and live-verified for the documented single-line DKK flow.
 
 ## Execution guarantees and limits
@@ -88,7 +88,7 @@ Each preview has a persisted ID and hash binding the operation **and the current
 
 ## Live verification status
 
-**Live purchase flow verified on 2026-09-22:** company-token connection, original PDF upload, attachment linking, Danish VAT purchase draft, approval and independent balanced-ledger readback were verified through the live API. Supplier legal-name changes can be matched by verified country and registration number. Build and 34 automated tests pass. A same-currency DKK supplier payment and single-posting bank reconciliation were also live-verified on 2026-09-22, including independent balanced-ledger and zero-balance checks; see [live acceptance](docs/live-acceptance.md).
+**Live purchase flow verified on 2026-09-22:** company-token connection, original PDF upload, attachment linking, Danish VAT purchase draft, approval and independent balanced-ledger readback were verified through the live API. Supplier legal-name changes can be matched by verified country and registration number. Build and 37 automated tests pass. A same-currency DKK supplier payment and single-posting bank reconciliation were also live-verified on 2026-09-22, including independent balanced-ledger and zero-balance checks; see [live acceptance](docs/live-acceptance.md).
 
 `BILLY_ALLOW_BANK_MATCHING` defaults to false independently of other writes. Public documentation labels match relationships read-only and does not explain the full approval sequence. The implemented single-posting sequence follows the separate documented association resource; the single-line DKK flow was subsequently live-validated; other variants remain unverified.
 
