@@ -45,6 +45,10 @@ test('published tarball shape and fresh local stdio install work without credent
     const installedSkill = join(skillParent, 'billy-bookkeeping');
     assert.match(readFileSync(join(installedSkill, 'SKILL.md'), 'utf8'), /Billy bookkeeping/);
     assert.ok(existsSync(join(installedSkill, 'references', 'tool-recipes.md')));
+    const ambiguous = run('skill', 'install', '--path', join(root, 'another'), '--client', 'codex');
+    assert.equal(ambiguous.status, 1);
+    assert.match(ambiguous.stderr, /only one/);
+    assert.ok(!existsSync(join(root, 'another')));
     const second = run('skill', 'install', '--path', skillParent);
     assert.equal(second.status, 1);
     assert.match(second.stderr, /already exists/);

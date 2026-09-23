@@ -9,6 +9,11 @@
     "dist/",
     "skills/billy-bookkeeping/",
     "docs/installation.md",
+    "docs/live-acceptance.md",
+    "docs/batches.md",
+    "docs/operations.md",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
     "LICENSE",
     "README.md"
   ],
@@ -25,7 +30,8 @@
     "check": "npm run build && npm test",
     "doctor": "tsx src/doctor.ts",
     "setup": "tsx src/setup.ts",
-    "recover": "tsx src/recover.ts"
+    "recover": "tsx src/recover.ts",
+    "prepack": "npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",

@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {presentGet,presentList,presentOverview,presentPlan,presentStatus,safeValue} from '../src/presentation.js';
+import {presentGet,presentList,presentOverview,presentPlan,presentStatus,safeValue,compactRecord} from '../src/presentation.js';
 
 test('compact lists retain every record and financial links while reducing payload',()=>{
   const records=Array.from({length:250},(_,i)=>({id:`posting-${i}`,organizationId:'org',accountId:'expense',transactionId:`txn-${i}`,
@@ -55,4 +55,14 @@ test('compact get keeps requested embedded bill evidence and safe local file pat
   const operation=safeValue({filePath:'/tmp/receipts/invoice.pdf',portalUrl:'https://example.test/billing',accessCode:'secret'});
   assert.equal((operation as any).filePath,'/tmp/receipts/invoice.pdf');assert.equal((operation as any).portalUrl,'https://example.test/billing');
   assert.equal((operation as any).accessCode,undefined);
+});
+
+test('compact reads retain supplier, tax, payment and portal decision fields',()=>{
+  const data={id:'record',countryId:'DK',registrationNo:'12345678',isSupplier:true,isCustomer:false,isPaymentEnabled:true,
+    predefinedTag:'purchase_example',appliesToPurchases:true,salesTaxRulesetId:'rules',productId:'product',
+    cashAmount:140,cashSide:'credit',cashAccountId:'bank',cashExchangeRate:7,subjectCurrencyId:'USD',feeAmount:1,
+    sentState:'unsent',portalUrl:'https://vendor.example/billing',accountLabel:'company',accessCode:'never-expose'};
+  const result=compactRecord(data);
+  for(const [key,value] of Object.entries(data))if(key!=='accessCode')assert.deepEqual(result[key],value,key);
+  assert.equal(result.accessCode,undefined);
 });

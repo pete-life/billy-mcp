@@ -35,6 +35,7 @@ function skillInstall(args: string[]) {
     else throw new Error(`Unknown or duplicate skill option: ${flag}`);
   }
   if (!parent && !client) throw new Error('Choose --path DIR or --client codex|claude.');
+  if (parent && client) throw new Error('Choose only one of --path or --client.');
   if (parent && !isAbsolute(parent)) throw new Error('--path must be absolute.');
   const skillParent = parent ? resolve(parent) : join(homedir(), client === 'codex' ? '.codex/skills' : '.claude/skills');
   const source = fileURLToPath(new URL('../skills/billy-bookkeeping/', import.meta.url));

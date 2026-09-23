@@ -9,7 +9,10 @@ const common=['id','organizationId','name','entryDate','dueDate','createdTime','
   'contactId','invoiceNo','suppliersInvoiceNo','voucherNo','systemRole','groupId','natureId','reportType',
   'normalBalance','accountNo','isArchived','isBankAccount','isReconciled','matchId','ownerReference',
   'fileId','attachmentId','bankLineId','subjectReference','modifierReference','taxRateId','quantity','unitPrice','rate',
-  'text','source','reference'] as const;
+  'text','source','reference','countryId','registrationNo','vatNo','isSupplier','isCustomer','isPaymentEnabled',
+  'predefinedTag','abbreviation','isActive','appliesToSales','appliesToPurchases','salesTaxRulesetId','productId',
+  'cashAmount','cashSide','cashAccountId','cashExchangeRate','subjectCurrencyId','feeAmount','feeAccountId','sentState',
+  'creditedInvoiceId','creditedBillId','portalUrl','accountLabel'] as const;
 const blockedKey=/password|passphrase|secret|token|credential|apiKey|accessCode|authorization|cookie|session|signed|downloadUrl|fileUrl/i;
 function unsafeUrl(value:string){
   try{const url=new URL(value);return Boolean(url.username||url.password||url.search||url.hash||/(?:token|secret|accesscode|signed|signature)[=/]/i.test(url.pathname));}
