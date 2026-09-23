@@ -28,6 +28,6 @@ try{
   const confirmed=await rl.question('Use this company? Type yes to confirm: ');
   if(confirmed.trim().toLowerCase()!=='yes')throw new Error('Company not confirmed; no configuration written');
   mkdirSync(c.dataDir,{recursive:true,mode:0o700});
-  writeFileSync(file,`BILLY_ACCESS_TOKEN=${token}\nBILLY_ORGANIZATION_ID=${org.id}\nBILLY_ALLOW_WRITES=false\nBILLY_ALLOW_BANK_MATCHING=false\n`,{mode:0o600,flag:'wx'});
+  writeFileSync(file,`BILLY_ACCESS_TOKEN=${token}\nBILLY_ORGANIZATION_ID=${org.id}\nBILLY_ALLOW_WRITES=false\nBILLY_APPROVAL_MODE=confirm\nBILLY_ALLOW_BANK_MATCHING=false\n`,{mode:0o600,flag:'wx'});
   console.log(`Saved locally to ${file}. Writes are disabled. You can now run the MCP server.`);
 }finally{rl.close();process.stdin.pause();}

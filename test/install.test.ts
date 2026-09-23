@@ -16,7 +16,7 @@ test('published tarball shape and fresh local stdio install work without credent
     const [packed] = JSON.parse(execFileSync('npm', ['pack', '--json', '--pack-destination', root], {encoding: 'utf8'})) as Array<{filename: string; files: Array<{path: string}>}>;
     assert.ok(packed);
     const names = packed.files.map(file => file.path);
-    for (const file of ['package.json', 'dist/cli.js', 'dist/launch.js', 'LICENSE', 'README.md', 'docs/installation.md', 'skills/billy-bookkeeping/SKILL.md', 'skills/billy-bookkeeping/references/tool-recipes.md', 'skills/billy-bookkeeping/agents/openai.yaml']) {
+    for (const file of ['package.json', 'dist/cli.js', 'dist/launch.js', 'LICENSE', 'README.md', 'docs/installation.md', 'docs/operations.md', 'docs/batches.md', 'docs/live-acceptance.md', 'skills/billy-bookkeeping/references/v02-operations.md', 'skills/billy-bookkeeping/SKILL.md', 'skills/billy-bookkeeping/references/tool-recipes.md', 'skills/billy-bookkeeping/agents/openai.yaml']) {
       assert.ok(names.includes(file), `missing ${file}`);
     }
     assert.ok(names.every(file => !/(^|\/)(src|test|acceptance|receipts|inbox|company-profiles|PBrain)(\/|$)|(^|\/)credentials\.env$|\.sqlite|\.env\.example$/.test(file)), 'tarball contains private or development material');
