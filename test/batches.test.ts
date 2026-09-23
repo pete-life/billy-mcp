@@ -8,7 +8,7 @@ import {BillyClient,resources,type Resource} from '../src/client.js';
 import {Engine} from '../src/engine.js';
 import type {ApprovalGate} from '../src/approval.js';
 import {BatchManager} from '../src/batches.js';
-import {Store,type BatchLease} from '../src/store.js';
+import {Store,digest,type BatchLease} from '../src/store.js';
 import type {Config} from '../src/config.js';
 
 function fixture(bankMatching=false){
@@ -24,7 +24,7 @@ function fixture(bankMatching=false){
     'bankLineMatches:match-1':{id:'match-1',isApproved:false,lines:[{id:'line-1'}],subjectAssociations:[]},
   };
   const getCalls:Array<{resource:string;id:string;include?:string}>=[];
-  const client={verifyOrganization:async()=>({id:'fixture-company'}),get:async(resource:string,id:string,include?:string)=>{
+  const client={verifyOrganization:async()=>({id:'fixture-company',defaultBankFeeAccountId:'fees'}),get:async(resource:string,id:string,include?:string)=>{
     getCalls.push({resource,id,include});
     const record=records[`${resource}:${id}`];if(!record)throw new Error(`Missing fixture ${resource}:${id}`);return structuredClone(record);
   },list:async()=>[]} as unknown as BillyClient;
@@ -34,16 +34,18 @@ function fixture(bankMatching=false){
   });
   const spec={reason:'Book the two verified fixture invoices',cases:receipts.map((receipt,index)=>({receiptId:receipt.id,bill:{contactId:`contact-${index+1}`,entryDate:'2026-09-20',currencyId:'DKK',suppliersInvoiceNo:`INV-${index+1}`,taxMode:'excl',lines:[{accountId:'expense',taxRateId:'vat',description:'Fixture service',amount:100}]},approve:true,reconcile:false}))};
   const writes:string[]=[];
-  let failBeforeSecondBill=false,unknownSecondBill=false,rejectSecondBill=false;
+  let failBeforeSecondBill=false,unknownSecondBill=false,rejectBill='';
   let afterWrite:(op:any)=>void=()=>{};
+  const billRecords:Record<string,any>={};
+  const planSnapshots=(op:any)=>op.kind==='create_bill'?[{taxRate:records['taxRates:vat'].rate??0,contactRegistration:records[`contacts:${op.contactId}`]?.registrationNo}]:op.kind==='approve'?[{resource:'bills',id:op.id,hash:digest(billRecords[op.id]),record:structuredClone(billRecords[op.id])}]:[];
   const engine={config:{writes:true,approvalMode:'trusted_automation',bankMatching},prepare:async(op:any,reason:string)=>{
     if(failBeforeSecondBill&&op.kind==='create_bill'&&op.suppliersInvoiceNo==='INV-2'){failBeforeSecondBill=false;throw new Error('Temporary fixture read failure');}
-    return store.prepare(op,[],reason);
+    return store.prepare(op,planSnapshots(op),reason);
   },execute:async(planId:string,hash:string,lease?:BatchLease)=>{
     const plan=store.claim(planId,hash,lease),op=plan.operation;
     writes.push(`${op.kind}:${op.suppliersInvoiceNo||op.receiptId||op.id||''}`);
-    if(rejectSecondBill&&op.kind==='create_bill'&&op.suppliersInvoiceNo==='INV-2'){
-      rejectSecondBill=false;store.finish(planId,'rejected',{error:'Definitive fixture rejection'});throw new Error('Definitive fixture rejection');
+    if(rejectBill&&op.kind==='create_bill'&&op.suppliersInvoiceNo===rejectBill){
+      rejectBill='';store.finish(planId,'rejected',{error:'Definitive fixture rejection'});throw new Error('Definitive fixture rejection');
     }
     if(unknownSecondBill&&op.kind==='create_bill'&&op.suppliersInvoiceNo==='INV-2'){
       store.finish(planId,'unknown',{error:'Uncertain fixture write'});throw new Error('Uncertain fixture write');
@@ -53,8 +55,12 @@ function fixture(bankMatching=false){
       const receipt=store.receipt(op.receiptId);receipt.attachmentId=`attachment-${writes.length}`;store.saveReceipt(receipt);
       result={receiptId:receipt.id,attachment:{id:receipt.attachmentId}};
     }
+    if(op.kind==='create_bill'){
+      result={...op,id:`bill-${op.suppliersInvoiceNo}`,state:'draft',amount:100,tax:25};
+      billRecords[result.id]=structuredClone(result);
+    }
     const done=store.finish(planId,'completed',result);afterWrite(op);return done;
-  },refresh:async(planId:string)=>store.refresh(planId,[]),resolvePaymentCashPosting:async(planId:string)=>{
+  },refresh:async(planId:string)=>store.refresh(planId,planSnapshots(store.plan(planId).operation)),resolvePaymentCashPosting:async(planId:string)=>{
     const plan=store.plan(planId);assert.equal(plan.status,'completed');assert.equal(plan.operation.kind,'create_payment');
     return {postingId:'posting-1',paymentId:'payment-1',bankLineId:plan.operation.bankLineId};
   }} as unknown as Engine;
@@ -62,7 +68,7 @@ function fixture(bankMatching=false){
   let approvalSideEffect:(()=>void)|undefined;
   const approval={authorize:async(scope:{hash:string})=>{approvalCount++;approvalSideEffect?.();return {mode:'trusted_automation',at:new Date().toISOString(),scopeHash:scope.hash};}} as unknown as ApprovalGate;
   const manager=new BatchManager(client,engine,store,approval);
-  return {root,inbox,store,records,spec,manager,writes,getCalls,get approvalCount(){return approvalCount;},failOnce(){failBeforeSecondBill=true;},unknownOnce(){unknownSecondBill=true;},rejectOnce(){rejectSecondBill=true;},onApproval(effect:()=>void){approvalSideEffect=effect;},onStageWrite(effect:(op:any)=>void){afterWrite=effect;},close(){store.close();rmSync(root,{recursive:true,force:true});}};
+  return {root,inbox,store,records,billRecords,spec,manager,writes,getCalls,get approvalCount(){return approvalCount;},failOnce(){failBeforeSecondBill=true;},unknownOnce(){unknownSecondBill=true;},rejectOnce(invoiceNo='INV-2'){rejectBill=invoiceNo;},onApproval(effect:()=>void){approvalSideEffect=effect;},onStageWrite(effect:(op:any)=>void){afterWrite=effect;},close(){store.close();rmSync(root,{recursive:true,force:true});}};
 }
 
 test('two-case purchase batch executes upload, bill and approval in order with one approval',async()=>{
@@ -126,6 +132,54 @@ test('material change between upload and bill stops before the next financial wr
     assert.deepEqual(f.writes.map(item=>item.split(':')[0]),['upload_receipt','create_bill','approve']);
   }finally{f.close();}
 });
+test('edited bill lines are rejected from the saved approval plan before approval write',async()=>{
+  const f=fixture();try{
+    f.spec.cases=f.spec.cases.slice(0,1);
+    f.onStageWrite(op=>{if(op.kind==='create_bill')f.billRecords['bill-INV-1'].lines[0].accountId='diverted';});
+    const batch=await f.manager.prepare(f.spec);
+    const partial=await f.manager.execute(batch.id,batch.hash,'Fixture authorization for exact batch') as any;
+    assert.equal(partial.stopped,true);assert.match(partial.error,/Approval plan bill identity or lines differ/);
+    assert.deepEqual(f.writes.map(item=>item.split(':')[0]),['upload_receipt','create_bill']);
+    assert.equal(partial.batch.stages['0:approve'].status,'prepared');
+    assert.equal(partial.batch.stages['0:bill'].recordId,'bill-INV-1');
+    assert.ok(!('snapshots' in partial.batch));
+    assert.ok(!('leaseNonce' in partial.batch));
+  }finally{f.close();}
+});
+test('refreshed unstarted batch accepts refreshed rejected child under new approval hash',async()=>{
+  const f=fixture();try{
+    f.spec.cases=f.spec.cases.slice(0,1);
+    const receipt=f.store.receipt(f.spec.cases[0]!.receiptId);receipt.attachmentId='preuploaded';f.store.saveReceipt(receipt);
+    f.rejectOnce('INV-1');
+    const original=await f.manager.prepare(f.spec);
+    const partial=await f.manager.execute(original.id,original.hash,'Fixture authorization for first scope') as any;
+    assert.equal(partial.stopped,true);assert.equal(partial.batch.status,'paused');
+    assert.equal(f.writes.length,1);
+    f.records['contacts:contact-1'].registrationNo='12345678';
+    const refreshed=await f.manager.refresh(original.id);
+    assert.notEqual(refreshed.hash,original.hash);assert.equal(refreshed.approval,undefined);
+    const done=await f.manager.execute(refreshed.id,refreshed.hash,'Fixture authorization for refreshed scope');
+    assert.equal(done.status,'completed',JSON.stringify(done));assert.equal(f.approvalCount,2);
+    assert.equal(f.writes.filter(item=>item.startsWith('create_bill:INV-1')).length,2);
+  }finally{f.close();}
+});
+test('typed fee payment snapshots the configured fee account',async()=>{
+  const f=fixture();try{
+    f.spec.cases=f.spec.cases.slice(0,1);
+    f.records['accounts:fees']={id:'fees',isArchived:false,currencyId:'DKK'};
+    const item=f.spec.cases[0] as any;
+    item.payment={entryDate:'2026-09-20',cashAmount:125,cashSide:'credit',cashAccountId:'bank',bankLineId:'line-1',subjectAmount:120,feeAmount:5,feeAccountId:'fees'};
+    const batch=await f.manager.prepare(f.spec);
+    assert.ok((f.store.batch(batch.id).snapshots[0] as any).records.some((record:any)=>record.resource==='accounts'&&record.id==='fees'));
+    f.records['accounts:fees'].isArchived=true;
+    await assert.rejects(()=>f.manager.execute(batch.id,batch.hash,'Fixture authorization for fee payment'),/archived/);
+    assert.equal(f.writes.length,0);
+    f.records['accounts:fees'].isArchived=false;
+    const done=await f.manager.execute(batch.id,batch.hash,'Fixture authorization for fee payment');
+    assert.equal(done.status,'completed',JSON.stringify(done));
+    assert.ok(f.writes.some(write=>write.startsWith('create_payment:')));
+  }finally{f.close();}
+});
 test('preflight rejects mismatched money and more than ten cases without approval',async()=>{
   const f=fixture();try{
     const bad=structuredClone(f.spec);bad.cases[0]!.bill.lines[0]!.amount=101;
@@ -152,6 +206,8 @@ test('unknown child outcome blocks resume and all company writes',async()=>{
     f.unknownOnce();const batch=await f.manager.prepare(f.spec);
     const partial=await f.manager.execute(batch.id,batch.hash,'Fixture authorization for exact batch') as any;
     assert.equal(partial.stopped,true);assert.equal(partial.batch.status,'paused');
+    assert.equal(partial.batch.stages['1:bill'].status,'unknown');
+    assert.match(partial.batch.stages['1:bill'].error,/Uncertain fixture write/);
     await assert.rejects(()=>f.manager.execute(batch.id,batch.hash,'Fixture authorization for exact batch'),/uncertain or executing write/);
     const separate=f.store.prepare({kind:'approve',id:'other'},[],'Separate fixture operation');
     assert.throws(()=>f.store.claim(separate.id,separate.hash),/unknown outcome/);
