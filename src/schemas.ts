@@ -43,16 +43,22 @@ const sendInvoice=z.strictObject({kind:z.literal('send_invoice'),id:identifier,c
 const customerCredit=z.strictObject({kind:z.literal('create_customer_credit_note'),originalInvoiceId:identifier,entryDate:date,
   lines:z.array(salesLine.extend({originalLineId:identifier})).min(1).max(100),...salesTotals})
   .refine(v=>Math.round(v.expectedNetAmount*100)+Math.round(v.expectedTaxAmount*100)===Math.round(v.expectedTotalAmount*100),'Expected net plus VAT must equal gross');
+const supplierCredit=z.strictObject({kind:z.literal('create_supplier_credit_note'),receiptId,originalBillId:identifier,entryDate:date,
+  lines:z.array(z.strictObject({originalLineId:identifier,accountId:identifier,taxRateId:identifier,description:z.string().min(1).max(1000),amount:positive})).min(1).max(100),
+  ...salesTotals})
+  .refine(v=>Math.round(v.expectedNetAmount*100)+Math.round(v.expectedTaxAmount*100)===Math.round(v.expectedTotalAmount*100),'Expected net plus VAT must equal gross');
 const approval=z.strictObject({kind:z.literal('approve'),resource:z.enum(['bills','invoices','daybookTransactions']),id:identifier});
 const upload=z.strictObject({kind:z.literal('upload_receipt'),receiptId});
 const contact=z.strictObject({kind:z.literal('create_contact'),name:z.string().trim().min(1).max(200),countryId:z.string().regex(/^[A-Z]{2}$/),
   registrationNo:z.string().max(100).optional(),email:z.email().optional(),isSupplier:z.boolean(),isCustomer:z.boolean()});
 const match=z.strictObject({kind:z.literal('reconcile'),bankLineId:identifier,subjectReference:reference});
-export const operation=z.union([bill,journal,payment,approval,upload,contact,match,salesInvoice,draftInvoice,sendInvoice,customerCredit]);
+export const operation=z.union([bill,journal,payment,approval,upload,contact,match,salesInvoice,draftInvoice,sendInvoice,customerCredit,supplierCredit]);
 export type Operation=z.infer<typeof operation>;
 export const receiptMetadata=z.strictObject({supplier:z.string().trim().min(1),supplierRegistrationNo:z.string().trim().min(1).optional(),supplierCountryId:z.string().regex(/^[A-Z]{2}$/).optional(),invoiceNumber:z.string().trim().min(1),invoiceDate:date,currencyId:identifier,
+  documentType:z.enum(['invoice','creditNote']).optional(),creditedInvoiceNumber:z.string().trim().min(1).max(160).optional(),
   netAmount:money,vatAmount:money,totalAmount:positive})
   .refine(v=>!v.supplierRegistrationNo||Boolean(v.supplierCountryId),'Supplier registration number requires its country')
+  .refine(v=>v.documentType==='creditNote'?Boolean(v.creditedInvoiceNumber):!v.creditedInvoiceNumber,'Supplier credit notes require the original invoice number')
   .refine(v=>Math.round(v.netAmount*100)+Math.round(v.vatAmount*100)===Math.round(v.totalAmount*100),'Net plus VAT must equal gross');
 export const source=z.strictObject({kind:z.enum(['gmail','drive','vendor_portal','local']),reference:z.string().min(1).max(1000),
   vendorId:identifier.optional(),retrievedAt:z.iso.datetime().optional()});

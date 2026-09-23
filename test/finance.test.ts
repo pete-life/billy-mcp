@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,mkdirSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {BillyClient,resources,type Resource} from '../src/client.js';
@@ -15,7 +15,7 @@ function fixture(){
   const records:Record<string,Record<string,any>>={
     contacts:{customer:{id:'customer',isCustomer:true,isArchived:false}},contactPersons:{person:{id:'person',contactId:'customer',email:'customer@example.test'}},
     products:{product:{id:'product',accountId:'sales',salesTaxRulesetId:'rules',isArchived:false}},
-    salesTaxRulesets:{rules:{id:'rules',fallbackTaxRateId:'vat'}},taxRates:{vat:{id:'vat',rate:.25,isActive:true,appliesToSales:true}},
+    salesTaxRulesets:{rules:{id:'rules',fallbackTaxRateId:'vat'}},taxRates:{vat:{id:'vat',rate:.25,isActive:true,appliesToSales:true,appliesToPurchases:true}},attachments:{},
     accounts:{sales:{id:'sales',isArchived:false},bank:{id:'bank',isArchived:false,isPaymentEnabled:true,currencyId:'DKK'},fee:{id:'fee',isArchived:false},
       payable:{id:'payable',isArchived:false,systemRole:'accountsPayable'},receivable:{id:'receivable',isArchived:false,systemRole:'accountsReceivable'},
       fx:{id:'fx',isArchived:false,systemRole:'realizedCurrencyDifference'}},
@@ -34,6 +34,9 @@ function fixture(){
       if(key)return Response.json({[resources[resource as Resource]]:records[resource]?.[key]});
       let values=Object.values(records[resource]||{});
       if(url.searchParams.has('creditedInvoiceId'))values=values.filter(v=>v.creditedInvoiceId===url.searchParams.get('creditedInvoiceId'));
+      if(url.searchParams.has('creditedBillId'))values=values.filter(v=>v.creditedBillId===url.searchParams.get('creditedBillId'));
+      if(url.searchParams.has('suppliersInvoiceNo'))values=values.filter(v=>v.suppliersInvoiceNo===url.searchParams.get('suppliersInvoiceNo'));
+      if(url.searchParams.has('ownerReference'))values=values.filter(v=>v.ownerReference===url.searchParams.get('ownerReference'));
       if(url.searchParams.has('entryDate'))values=values.filter(v=>v.entryDate===url.searchParams.get('entryDate'));
       return Response.json({[resource]:values,meta:{paging:{pageCount:1}}});
     }
@@ -53,12 +56,21 @@ function fixture(){
       record.tax=record.lines.reduce((n:number,l:any)=>n+l.tax,0);
       if(failure==='bad:invoice-tax')record.tax+=1;
     }
+    if(resource==='bills'&&payload.lines){
+      record.lines=payload.lines.map((line:any,index:number)=>({...line,id:`bill-line-${record.id}-${index}`,billId:record.id,tax:payload.taxMode==='incl'?line.amount/5:line.amount/4}));
+      const entered=record.lines.reduce((n:number,line:any)=>n+line.amount,0);
+      record.amount=payload.taxMode==='incl'?entered/1.25:entered;
+      record.tax=record.amount*.25;
+      if(failure==='bad:bill-tax')record.tax+=1;
+      if(payload.attachmentIds)records.attachments[payload.attachmentIds[0].id].ownerReference=`bill:${record.id}`;
+    }
     if(resource==='bankPayments'){
       const [kind,id]=payload.associations[0].subjectReference.split(':'),subject=records[`${kind}s`][id];
       const foreign=subject.currencyId!=='DKK',fee=payload.feeAmount||0;
       const applied=payload.cashAmount+(payload.cashSide==='debit'?fee:-fee),amount=foreign?applied/payload.cashExchangeRate:applied;
       subject.balance=Math.round((subject.balance-amount)*100)/100;subject.isPaid=subject.balance===0;
       record.subjectCurrencyId=subject.currencyId;record.cashExchangeRate=payload.cashExchangeRate||1;
+      if(failure==='bad:unexpected-fee')record.feeAmount=1;
       record.associations=[{subjectReference:payload.associations[0].subjectReference,amount:-amount,modifierReference:`bankPayment:${record.id}`,isVoided:false}];
       subject.balanceModifiers=[...(subject.balanceModifiers||[]),...record.associations];
       const liability=Math.round(amount*(foreign?subject.exchangeRate:1)*100)/100,difference=Math.round((applied-liability)*100)/100;
@@ -78,7 +90,16 @@ function fixture(){
     return Response.json({[resource]:[record]});
   };
   const engine=new Engine(new BillyClient(config.token,config.organizationId,fetcher,async()=>{}),store,config);
-  return {engine,store,records,calls,fail:(value:string)=>{failure=value;}};
+  const supplierCreditReceipt=()=>{
+    const path=join(inbox,'supplier-credit.pdf');writeFileSync(path,'%PDF-1.4\nsynthetic supplier credit\n%%EOF');
+    const metadata={supplier:'Supplier Ltd',invoiceNumber:'CN-1',invoiceDate:'2026-09-02',currencyId:'DKK',
+      documentType:'creditNote',creditedInvoiceNumber:'PUR-1',netAmount:40,vatAmount:10,totalAmount:50};
+    const receipt=store.importReceipt(path,{kind:'local',reference:'synthetic-credit'},metadata);
+    receipt.attachmentId='credit-attachment';store.saveReceipt(receipt);
+    records.attachments['credit-attachment']={id:'credit-attachment',fileId:'synthetic-file'};
+    return receipt;
+  };
+  return {engine,store,records,calls,fail:(value:string)=>{failure=value;},supplierCreditReceipt};
 }
 
 const sales={kind:'create_sales_invoice',contactId:'customer',entryDate:'2026-09-01',currencyId:'DKK',taxMode:'excl',
@@ -168,6 +189,48 @@ test('customer credit read-back mismatch remains an unknown financial write',asy
   }finally{f.store.close();}
 });
 
+test('supplier credit note requires original bill and uploaded credit evidence, then prevents duplicate and overcredit',async()=>{
+  const f=fixture(),receipt=f.supplierCreditReceipt();
+  f.records.contacts.supplier={id:'supplier',name:'Supplier Ltd',isSupplier:true};
+  f.records.accounts.expense={id:'expense',isArchived:false};
+  f.records.bills.original={id:'original',type:'bill',state:'approved',contactId:'supplier',currencyId:'DKK',taxMode:'incl',
+    suppliersInvoiceNo:'PUR-1',amount:100,tax:25,lines:[{id:'original-line',accountId:'expense',taxRateId:'vat',description:'Materials',amount:125,tax:25}]};
+  const op={kind:'create_supplier_credit_note',receiptId:receipt.id,originalBillId:'original',entryDate:'2026-09-02',
+    lines:[{originalLineId:'original-line',accountId:'expense',taxRateId:'vat',description:'Materials refund',amount:50}],
+    expectedNetAmount:40,expectedTaxAmount:10,expectedTotalAmount:50};
+  try{
+    const plan=await f.engine.prepare(op,'Original supplier credit and bill reviewed');
+    const done=await f.engine.execute(plan.id,plan.hash);
+    assert.equal(done.result.type,'creditNote');assert.equal(done.result.creditedBillId,'original');
+    assert.equal(f.records.attachments['credit-attachment'].ownerReference,`bill:${done.result.id}`);
+    await assert.rejects(f.engine.prepare({...op,entryDate:'2026-09-03'},'Duplicate credit document'),/date|already exists|Duplicate|number/);
+  }finally{f.store.close();}
+  const g=fixture(),secondReceipt=g.supplierCreditReceipt();
+  g.records.contacts.supplier={id:'supplier',name:'Supplier Ltd',isSupplier:true};g.records.accounts.expense={id:'expense',isArchived:false};
+  g.records.bills.original={id:'original',type:'bill',state:'approved',contactId:'supplier',currencyId:'DKK',taxMode:'incl',
+    suppliersInvoiceNo:'PUR-1',amount:100,tax:25,lines:[{id:'original-line',accountId:'expense',taxRateId:'vat',description:'Materials',amount:125,tax:25}]};
+  g.records.bills.previous={id:'previous',type:'creditNote',state:'approved',creditedBillId:'original',contactId:'supplier',currencyId:'DKK',
+    suppliersInvoiceNo:'OLDER-CN',amount:80,tax:20,lines:[{id:'previous-line',accountId:'expense',taxRateId:'vat',description:'Earlier refund',amount:100,tax:20}]};
+  try{await assert.rejects(g.engine.prepare({...op,receiptId:secondReceipt.id},'Reject cumulative overcredit'),/exceeds|exceed/);}
+  finally{g.store.close();}
+});
+
+test('supplier credit bad read-back is unknown and blocks retry',async()=>{
+  const f=fixture(),receipt=f.supplierCreditReceipt();
+  f.records.contacts.supplier={id:'supplier',name:'Supplier Ltd',isSupplier:true};f.records.accounts.expense={id:'expense',isArchived:false};
+  f.records.bills.original={id:'original',type:'bill',state:'approved',contactId:'supplier',currencyId:'DKK',taxMode:'incl',
+    suppliersInvoiceNo:'PUR-1',amount:100,tax:25,lines:[{id:'original-line',accountId:'expense',taxRateId:'vat',description:'Materials',amount:125,tax:25}]};
+  try{
+    const plan=await f.engine.prepare({kind:'create_supplier_credit_note',receiptId:receipt.id,originalBillId:'original',entryDate:'2026-09-02',
+      lines:[{originalLineId:'original-line',accountId:'expense',taxRateId:'vat',description:'Materials refund',amount:50}],
+      expectedNetAmount:40,expectedTaxAmount:10,expectedTotalAmount:50},'Credit read-back fixture');
+    f.fail('bad:bill-tax');
+    await assert.rejects(f.engine.execute(plan.id,plan.hash),/VAT/);
+    assert.equal(f.store.plan(plan.id).status,'unknown');
+    await assert.rejects(f.engine.execute(plan.id,plan.hash),/unknown/);
+  }finally{f.store.close();}
+});
+
 test('same-currency provider fee and partial foreign bill payment verify exact ledger',async()=>{
   const f=fixture();f.records.invoices.invoice={id:'invoice',state:'approved',type:'invoice',contactId:'customer',currencyId:'DKK',balance:200,isPaid:false,balanceModifiers:[]};
   try{
@@ -198,6 +261,33 @@ test('wrong fee ledger posting records unknown outcome',async()=>{
     const op={kind:'create_payment',entryDate:'2026-09-01',cashAmount:95,cashSide:'debit',cashAccountId:'bank',bankLineId:'line',subjectReference:'invoice:invoice',subjectAmount:100,feeAmount:5,feeAccountId:'fee'};
     const plan=await f.engine.prepare(op,'Fee ledger verification');f.fail('bad:fee-ledger');
     await assert.rejects(f.engine.execute(plan.id,plan.hash),/fee expense/);
+    assert.equal(f.store.plan(plan.id).status,'unknown');
+  }finally{f.store.close();}
+});
+
+test('fractional original-liability FX split and non-base-currency fee reject before write',async()=>{
+  const f=fixture();f.records.bankLines.line.amount=.07;f.records.bankLines.line.side='credit';
+  f.records.bills.bill={id:'bill',state:'approved',currencyId:'USD',balance:.02,isPaid:false,exchangeRate:6.5,balanceModifiers:[]};
+  try{
+    await assert.rejects(f.engine.prepare({kind:'create_payment',entryDate:'2026-09-01',cashAmount:.07,cashSide:'credit',cashAccountId:'bank',
+      bankLineId:'line',subjectReference:'bill:bill',subjectAmount:.01,subjectCurrencyId:'USD',cashExchangeRate:7},'Ambiguous cent split'),/ambiguous original-liability cent rounding/);
+    assert.equal(f.calls.filter(c=>c.method==='POST').length,0);
+  }finally{f.store.close();}
+  const g=fixture();g.records.accounts.bank.currencyId='USD';g.records.invoices.invoice={id:'invoice',state:'approved',currencyId:'USD',balance:100,isPaid:false,balanceModifiers:[]};
+  try{
+    await assert.rejects(g.engine.prepare({kind:'create_payment',entryDate:'2026-09-01',cashAmount:95,cashSide:'debit',cashAccountId:'bank',
+      bankLineId:'line',subjectReference:'invoice:invoice',subjectAmount:100,feeAmount:5,feeAccountId:'fee'},'Non-base fee'),/base-currency/);
+    assert.equal(g.calls.filter(c=>c.method==='POST').length,0);
+  }finally{g.store.close();}
+});
+
+test('unexpected fee on a no-fee payment is an unknown write',async()=>{
+  const f=fixture();f.records.invoices.invoice={id:'invoice',state:'approved',currencyId:'DKK',balance:95,isPaid:false,balanceModifiers:[]};
+  try{
+    const plan=await f.engine.prepare({kind:'create_payment',entryDate:'2026-09-01',cashAmount:95,cashSide:'debit',cashAccountId:'bank',
+      bankLineId:'line',subjectReference:'invoice:invoice'},'No fee on statement');
+    f.fail('bad:unexpected-fee');
+    await assert.rejects(f.engine.execute(plan.id,plan.hash),/fee amount/);
     assert.equal(f.store.plan(plan.id).status,'unknown');
   }finally{f.store.close();}
 });

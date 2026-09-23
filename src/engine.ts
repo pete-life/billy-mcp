@@ -5,6 +5,7 @@ import type {Config} from './config.js';
 type BatchLease={batchId:string;nonce:string};
 
 const cents=(v:number)=>Math.round(v*100);
+const exactCent=(v:number)=>Number.isFinite(v)&&Math.abs(v*100-Math.round(v*100))<0.000001;
 const normalize=(v:unknown)=>String(v??'').trim().toLowerCase().replace(/\s+/g,' ');
 const numeric=(value:unknown)=>Number(value);
 const currencyOf=(record:RecordData)=>typeof record.currencyId==='string'?record.currencyId:
@@ -51,11 +52,11 @@ function verifyInvoice(actual:RecordData,op:{expectedNetAmount:number;expectedTa
   }
 }
 function verifyLines(actual:RecordData, expected:RecordData[]) {
-  if(!Array.isArray(actual.lines)||actual.lines.length!==expected.length)throw new Error('Read-back journal lines are missing or changed');
+  if(!Array.isArray(actual.lines)||actual.lines.length!==expected.length)throw new Error('Read-back lines are missing or changed');
   const remaining=[...actual.lines];
   for(const line of expected){
     const index=remaining.findIndex(candidate=>Object.entries(line).every(([key,value])=>key==='amount'?Number.isFinite(Number(candidate[key]))&&cents(Number(candidate[key]))===cents(value):candidate[key]===value));
-    if(index<0)throw new Error('Read-back journal account, amount, direction, currency or text differs');remaining.splice(index,1);
+    if(index<0)throw new Error('Read-back line account, amount, direction, tax or text differs');remaining.splice(index,1);
   }
 }
 function subject(ref:string): {resource:Resource; id:string} {
@@ -88,6 +89,7 @@ export class Engine {
       }
       case 'create_bill': {
         const r=receipt(op.receiptId), contact=await get('contacts',op.contactId);
+        if(r.metadata.documentType==='creditNote')throw new Error('Supplier credit document requires a linked supplier credit note, not an ordinary bill');
         if(!contact.isSupplier)throw new Error('Contact is not a supplier');
         if(!supplierMatches(contact,r.metadata))throw new Error('Receipt supplier does not match selected contact identity; verify name or country and registration number');
         if(r.metadata.invoiceNumber!==op.suppliersInvoiceNo||r.metadata.invoiceDate!==op.entryDate||r.metadata.currencyId!==op.currencyId)throw new Error('Bill does not match the receipt invoice number, date or currency');
@@ -159,6 +161,46 @@ export class Engine {
         if(priorNet+cents(op.expectedNetAmount)>cents(original.amount)||priorTax+cents(op.expectedTaxAmount)>cents(original.tax))throw new Error('Credit would exceed original net amount or VAT');
         break;
       }
+      case 'create_supplier_credit_note': {
+        const r=receipt(op.receiptId),original=await get('bills',op.originalBillId,'bill.lines:embed');
+        if(r.metadata.documentType!=='creditNote'||r.metadata.creditedInvoiceNumber!==original.suppliersInvoiceNo)throw new Error('Supplier credit document must identify the original supplier invoice number');
+        if(original.state!=='approved'||original.type!=='bill'||!Array.isArray(original.lines)||!original.lines.length)throw new Error('Supplier credit requires an approved ordinary original bill with lines');
+        if(!original.contactId||!currencyOf(original)||!['incl','excl'].includes(original.taxMode)||currencyOf(original)!==r.metadata.currencyId)throw new Error('Original bill contact, tax mode or currency differs from credit document');
+        const contact=await get('contacts',original.contactId);
+        if(!contact.isSupplier||!supplierMatches(contact,r.metadata))throw new Error('Supplier credit document does not match original supplier identity');
+        if(op.entryDate!==r.metadata.invoiceDate||cents(op.expectedNetAmount)!==cents(r.metadata.netAmount)||cents(op.expectedTaxAmount)!==cents(r.metadata.vatAmount)||
+          cents(op.expectedTotalAmount)!==cents(r.metadata.totalAmount))throw new Error('Supplier credit date, net, VAT or gross differs from uploaded document');
+        if(!Number.isFinite(Number(original.amount))||!Number.isFinite(Number(original.tax)))throw new Error('Original bill totals are unavailable');
+        const attachment=await get('attachments',r.attachmentId!);
+        if(attachment.ownerReference)throw new Error('Supplier credit document already belongs to another Billy record');
+        const duplicate=(await this.client.list('bills',{suppliersInvoiceNo:r.metadata.invoiceNumber})).some(b=>b.contactId===original.contactId&&normalize(b.suppliersInvoiceNo)===normalize(r.metadata.invoiceNumber));
+        if(duplicate)throw new Error('Supplier credit document number already exists');
+        const prior=(await this.client.list('bills',{creditedBillId:op.originalBillId})).filter(b=>b.creditedBillId===op.originalBillId&&b.state!=='voided');
+        const priorDetails=[] as RecordData[];
+        for(const credit of prior)priorDetails.push(await get('bills',credit.id,'bill.lines:embed'));
+        if(priorDetails.some(credit=>credit.type!=='creditNote'||credit.contactId!==original.contactId||currencyOf(credit)!==currencyOf(original)||
+          !Array.isArray(credit.lines)||!Number.isFinite(Number(credit.amount))||!Number.isFinite(Number(credit.tax))||
+          credit.lines.some((line:RecordData)=>!Number.isFinite(Number(line.amount))||!Number.isFinite(Number(line.tax)))))throw new Error('Existing supplier credits are not inspectable or differ from original');
+        const selected=new Set<string>();
+        let entered=0;
+        for(const line of op.lines){
+          const source=original.lines.find((candidate:RecordData)=>candidate.id===line.originalLineId);
+          if(!source||source.accountId!==line.accountId||source.taxRateId!==line.taxRateId||selected.has(line.originalLineId))throw new Error('Supplier credit line must identify one distinct original account and tax line');
+          if(original.lines.filter((candidate:RecordData)=>candidate.accountId===line.accountId&&candidate.taxRateId===line.taxRateId).length!==1)throw new Error('Original repeats an account and tax pair; credit allocation is ambiguous');
+          if(!Number.isFinite(Number(source.amount))||!Number.isFinite(Number(source.tax)))throw new Error('Original bill line amount or VAT is unavailable');
+          selected.add(line.originalLineId);entered+=cents(line.amount);
+          await account(line.accountId);
+          const tax=await get('taxRates',line.taxRateId);
+          if(tax.isActive===false||tax.appliesToPurchases===false)throw new Error('Supplier credit tax rate is inactive or not for purchases');
+          const previous=priorDetails.flatMap(credit=>credit.lines).filter((candidate:RecordData)=>candidate.accountId===line.accountId&&candidate.taxRateId===line.taxRateId);
+          if(cents(line.amount)+previous.reduce((n:number,candidate:RecordData)=>n+cents(candidate.amount),0)>cents(source.amount))throw new Error('Supplier credit exceeds original bill line');
+          if(previous.some((candidate:RecordData)=>cents(candidate.amount)===cents(line.amount)&&normalize(candidate.description)===normalize(line.description)))throw new Error('Duplicate supplier credit line already exists');
+        }
+        if(entered!==cents(original.taxMode==='incl'?op.expectedTotalAmount:op.expectedNetAmount))throw new Error('Supplier credit lines do not match uploaded document totals');
+        if(priorDetails.reduce((n,credit)=>n+cents(credit.amount),0)+cents(op.expectedNetAmount)>cents(original.amount)||
+          priorDetails.reduce((n,credit)=>n+cents(credit.tax),0)+cents(op.expectedTaxAmount)>cents(original.tax))throw new Error('Supplier credit would exceed original net amount or VAT');
+        break;
+      }
       case 'create_journal': {
         await get('daybooks',op.daybookId);
         if(op.bankLineId){
@@ -222,11 +264,18 @@ export class Engine {
           if(op.subjectCurrencyId!==subjectCurrency)throw new Error('FX subjectCurrencyId does not match the approved bill currency');
           const originalRate=numeric(s.exchangeRate);
           if(!Number.isFinite(originalRate)||originalRate<=0)throw new Error('Approved foreign-currency bill has no usable original exchangeRate');
-          if(cents(op.subjectAmount*op.cashExchangeRate)!==cents(appliedCash))throw new Error('cashExchangeRate does not explain bank cash and fee for subjectAmount');
           if(!Array.isArray(s.balanceModifiers))throw new Error('Foreign-currency payment requires inspectable existing payment associations');
+          if(!exactCent(op.subjectAmount*originalRate)||s.balanceModifiers.some((modifier:RecordData)=>!modifier.isVoided&&(!Number.isFinite(Number(modifier.amount))||!exactCent(Math.abs(Number(modifier.amount))*originalRate))))
+            throw new Error('Foreign-currency partial payment has ambiguous original-liability cent rounding; review in Billy');
+          if(cents(op.subjectAmount*op.cashExchangeRate)!==cents(appliedCash))throw new Error('cashExchangeRate does not explain bank cash and fee for subjectAmount');
           const baseCurrency=typeof organization.baseCurrencyId==='string'?organization.baseCurrencyId:
             (organization.baseCurrency&&typeof organization.baseCurrency.id==='string'?organization.baseCurrency.id:undefined);
           if(!baseCurrency||cashCurrency!==baseCurrency)throw new Error('Foreign-currency payment requires the organization base-currency bank account');
+        }
+        if(fee){
+          const baseCurrency=typeof organization.baseCurrencyId==='string'?organization.baseCurrencyId:
+            (organization.baseCurrency&&typeof organization.baseCurrency.id==='string'?organization.baseCurrency.id:undefined);
+          if(!baseCurrency||cashCurrency!==baseCurrency)throw new Error('Fee-bearing payment requires the organization base-currency bank account for ledger verification');
         }
         if(cashCurrency!==subjectCurrency||fee){
           const roleAccounts=await this.client.list('accounts');
@@ -303,7 +352,7 @@ export class Engine {
       const verify=async(resource:Resource,response:RecordData,expected:RecordData)=>{
         const record=response[resource]?.[0];
         if(!record?.id)throw new Error('Write response lacks created/updated record ID');
-        const actual=await this.client.get(resource,record.id,resource==='daybookTransactions'?'daybookTransaction.lines:embed':resource==='invoices'?'invoice.lines:embed':undefined);
+        const actual=await this.client.get(resource,record.id,resource==='daybookTransactions'?'daybookTransaction.lines:embed':resource==='invoices'?'invoice.lines:embed':resource==='bills'?'bill.lines:embed':undefined);
         for(const [key,value] of Object.entries(expected)){if(typeof value==='number'){assertMoney(actual[key],value,key);}else if(actual[key]!==value)throw new Error(`Read-back verification failed for ${key}`);}
         return actual;
       };
@@ -364,6 +413,22 @@ export class Engine {
             entryDate:op.entryDate,currencyId:currencyOf(original),taxMode:original.taxMode,state:'draft'});
           verifyInvoice(credit,op);result=credit;break;
         }
+        case 'create_supplier_credit_note': {
+          const original=snapshots.find(s=>s.resource==='bills'&&s.id===op.originalBillId)?.record;
+          if(!original)throw new Error('Original bill snapshot is missing');
+          const receipt=this.store.receipt(op.receiptId);
+          const lines=op.lines.map(({originalLineId,...line})=>line);
+          const response=await write('bills',{type:'creditNote',creditedBillId:op.originalBillId,contactId:original.contactId,
+            entryDate:op.entryDate,suppliersInvoiceNo:receipt.metadata.invoiceNumber,currencyId:currencyOf(original),taxMode:original.taxMode,
+            lines,state:'draft',attachmentIds:[{id:receipt.attachmentId}]});
+          const credit=await verify('bills',response,{type:'creditNote',creditedBillId:op.originalBillId,contactId:original.contactId,
+            entryDate:op.entryDate,suppliersInvoiceNo:receipt.metadata.invoiceNumber,currencyId:currencyOf(original),taxMode:original.taxMode,state:'draft'});
+          verifyBill(credit,receipt.metadata);
+          verifyLines(credit,lines);
+          const attachments=await this.client.list('attachments',{ownerReference:`bill:${credit.id}`});
+          if(!attachments.some(a=>a.id===receipt.attachmentId))throw new Error('Supplier credit document attachment was not confirmed');
+          result=credit;break;
+        }
         case 'create_journal': {
           const {kind,receiptId,noReceiptReason,bankLineId,...payload}=op;
           result=await verify('daybookTransactions',await write('daybookTransactions',{...payload,state:'draft',...(receiptId?{attachmentIds:[{id:this.store.receipt(receiptId).attachmentId}]}:{})}),{state:'draft',entryDate:op.entryDate});
@@ -399,7 +464,8 @@ export class Engine {
             if(paymentSubjectCurrency!==subjectCurrencyId)throw new Error('Payment read-back subject currency differs from the reviewed bill');
             if(!close(paymentRead.cashExchangeRate,op.cashExchangeRate!))throw new Error('Payment read-back exchange rate differs from the reviewed bank payment');
           }
-          if(fee&&(cents(paymentRead.feeAmount)!==cents(fee)||paymentRead.feeAccountId!==op.feeAccountId))throw new Error('Payment read-back fee amount or expense account differs');
+          if(!Number.isFinite(Number(paymentRead.feeAmount??0))||cents(Number(paymentRead.feeAmount??0))!==cents(fee)||
+            (fee&&paymentRead.feeAccountId!==op.feeAccountId))throw new Error('Payment read-back fee amount or expense account differs');
           if(cents(association.amount)!==-cents(expectedSubjectDelta))throw new Error('Payment association amount does not match the reviewed subject amount');
           const modifier=associationModifier(association);
           if(modifier&&modifier!==`bankPayment:${payment.id}`)throw new Error('Payment association modifier does not reference the created bank payment');
