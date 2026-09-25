@@ -8,11 +8,12 @@ description: Collect original receipts from mail, files or vendor billing portal
 ## Gotchas
 
 - Version 0.2 read responses use `records` for lists and `record` for one object. Default output is compact. Request `verbose:true` only for missing evidence; never infer absence of a field from the compact view.
-- `confirm` mode requires the client approval form; a tool authorization note cannot grant consent. Never change the profile to `trusted_automation` to bypass a declined or unsupported form. The operator chooses that mode locally.
+- `confirm` mode requires the client approval form; a tool authorization note cannot grant consent. Do not choose `trusted_automation` yourself to bypass a failed form. An explicit operator choice authorizes the local profile change; preserve that choice and verify it on the executing connection after reconnecting. A running server can retain the old mode.
 - A batch may stop after some stages completed. Resume its existing ID/hash after inspecting the stop; do not restart completed invoices as new cases.
 
 - Every payment requires a live, explicitly unapproved single-line bank match with no subject associations. A missing `bankLine.isReconciled` field or an empty local journal is not proof that a bank movement is unused. The MCP rechecks the match immediately before writing.
 
+- On a definitive pre-write snapshot rejection, inspect and refresh the same plan once if the scope still matches. If it repeats, stop that operation and report the integration exception; never loop refresh/execute or weaken checks.
 - A completed write followed by a failed read remains a completed write. Inspect its saved plan and the existing record; never recreate it. Embedded bill lines require `bill.lines:embed`, not `lines`.
 - `unknown` or interrupted `executing` outcomes stop further company writes. Do not edit the database, bypass the MCP, change operation wording or invoke recovery to force another attempt.
 - A receipt marked paid is not proof of a settled bank movement. Payment requires the exact bank line; reconciliation matches the resulting existing posting.
@@ -50,6 +51,8 @@ Use the payment recipe only with a verified exact bank movement, unpaid approved
 For sales drafts, separately authorized invoice sending, original-linked customer/supplier credit notes, partial FX or fees, read [v02-operations.md](references/v02-operations.md). It states the required evidence and what still needs a separately authorized first live acceptance. For account balances, period P&L, outstanding documents and expense totals, use its report recipes. Do not calculate a full-period result from a subset of retrieved rows.
 
 ## Keep routine work efficient
+
+Check the live approval mode before writing. Integration forms and the host client's sandbox permissions are separate layers; changing one does not guarantee the other will work. Prefer available MCP tools and reuse one permitted connection for a bounded task. Group authorized stages where supported, inspect every result, and keep dependent writes sequential. Do not request broad interpreter permissions to reduce prompts. Retry a failed approval only after changed conditions or an explicit operator retry, then report a repeated failure precisely.
 
 For a verified company/vendor pattern, use one reader packet and one clean executor for the authorized stages. Reuse evidence; batch independent reads, but serialize financial writes for a company. Do not repeat API research, repository exploration or code review for an unchanged supported recipe. Investigate actual new exceptions and run engineering gates when code changes. Preserve original, duplicate, bank identity and final ledger checks.
 

@@ -66,4 +66,4 @@ Use returned scope and completeness fields. Reports use current void state; they
 
 Invoice snapshots exclude only the top-level `downloadUrl`, which Billy can regenerate on every read. All other fields remain covered by the comparison, including unknown fields. Old unexecuted/rejected plans containing the link need an explicit refresh and review before execution; do not alter completed or unknown plans. For repeated pre-write drift rejection, inspect and refresh once, then return the unresolved case for investigation instead of looping.
 
-Net-term updates are fixture-tested; deployment-specific live acceptance must separately confirm that Billy recalculates dueDate when changing from date to net. Read the private deployment profile for that evidence.
+Net-term updates have fixture coverage and a live-verified date-to-net update with due-date readback. See the release verification scope and private deployment profile for applicable evidence; this does not validate invoice sending.
