@@ -23,7 +23,7 @@ function fixture(){
     bankLineMatches:{match:{id:'match',isApproved:false,lines:[{id:'line'}],subjectAssociations:[]}},transactions:{},postings:{},
   };
   const calls:{method:string;path:string;body:any}[]=[];
-  let failure='',paymentSubjectGets=0;
+  let failure='',paymentSubjectGets=0,invoiceReads=0;
   const fetcher:typeof fetch=async(input,init)=>{
     const url=new URL(String(input)),path=url.pathname.replace('/v2/',''),[resource,key,action]=path.split('/');
     const method=init?.method||'GET',body=typeof init?.body==='string'?JSON.parse(init.body):undefined;
@@ -32,7 +32,10 @@ function fixture(){
     if(path==='organization')return Response.json({organization:{id:'fixture-org',baseCurrencyId:'DKK',defaultBankFeeAccountId:'fee'}});
     if(method==='GET'){
       if(failure==='drift:payment-subject'&&key==='invoice'&&resource==='invoices'&&++paymentSubjectGets===2)records.invoices.invoice.balance=50;
-      if(key)return Response.json({[resources[resource as Resource]]:records[resource]?.[key]});
+      if(key){
+        const record=records[resource]?.[key];
+        return Response.json({[resources[resource as Resource]]:resource==='invoices'&&record?{...record,downloadUrl:`https://example.test/download?nonce=${++invoiceReads}`}:record});
+      }
       let values=Object.values(records[resource]||{});
       if(url.searchParams.has('creditedInvoiceId'))values=values.filter(v=>v.creditedInvoiceId===url.searchParams.get('creditedInvoiceId'));
       if(url.searchParams.has('creditedBillId'))values=values.filter(v=>v.creditedBillId===url.searchParams.get('creditedBillId'));
@@ -46,6 +49,10 @@ function fixture(){
       return Response.json({accepted:true});
     }
     const payload=body[resources[resource as Resource]],record={...(key?records[resource]?.[key]:{}),...payload,id:key||`${resource}-${Object.keys(records[resource]||{}).length+1}`};
+    if(resource==='invoices'&&payload.paymentTermsMode==='net'){
+      const date=new Date(`${record.entryDate}T00:00:00Z`);date.setUTCDate(date.getUTCDate()+payload.paymentTermsDays);
+      record.dueDate=failure==='bad:due-date'?'2000-01-01':date.toISOString().slice(0,10);
+    }
     if(resource==='invoices'&&key&&failure==='bad:header-lines')record.lines[0].productId='substituted-product';
     if(resource==='invoices'&&payload.state==='approved'&&failure==='bad:approve-lines')record.lines[0].productId='substituted-product';
     if(resource==='invoices'&&payload.lines){
@@ -397,5 +404,74 @@ test('negative linked supplier credits cannot offset an excessive positive credi
   try{
     await assert.rejects(f.engine.prepare({kind:'approve',resource:'bills',id:'target'},'Review excessive credit with negative sibling'),/must be nonnegative/);
     assert.equal(f.calls.filter(call=>call.method!=='GET').length,0);
+  }finally{f.store.close();}
+});
+
+
+test('net terms tolerate rotating download links and verify due date across month boundary',async()=>{
+  const f=fixture();
+  try{
+    const created=await f.engine.prepare({...sales,entryDate:'2026-01-30'},'Synthetic draft');
+    await f.engine.execute(created.id,created.hash);
+    Object.assign(f.records.invoices['invoices-1'],{paymentTermsMode:'date',paymentTermsDays:null,dueDate:null});
+    const plan=await f.engine.prepare({kind:'update_draft_invoice',id:'invoices-1',paymentTermsDays:7,
+      expectedNetAmount:100,expectedTaxAmount:25,expectedTotalAmount:125},'Net seven days');
+    const done=await f.engine.execute(plan.id,plan.hash);
+    assert.equal(done.result.paymentTermsMode,'net');assert.equal(done.result.paymentTermsDays,7);
+    assert.equal(done.result.dueDate,'2026-02-06');assert.equal(done.result.state,'draft');assert.equal(done.result.sentState,'unsent');
+    assert.equal(f.calls.filter(c=>c.method==='PUT').length,1);
+  }finally{f.store.close();}
+});
+
+test('wrong due-date readback is unknown and cannot be retried',async()=>{
+  const f=fixture();
+  try{
+    const created=await f.engine.prepare(sales,'Synthetic draft');await f.engine.execute(created.id,created.hash);
+    const plan=await f.engine.prepare({kind:'update_draft_invoice',id:'invoices-1',paymentTermsDays:7,
+      expectedNetAmount:100,expectedTaxAmount:25,expectedTotalAmount:125},'Net seven days');
+    f.fail('bad:due-date');
+    await assert.rejects(f.engine.execute(plan.id,plan.hash),/dueDate/);
+    assert.equal(f.store.plan(plan.id).status,'unknown');
+    await assert.rejects(f.engine.execute(plan.id,plan.hash),/unknown/);
+    assert.equal(f.calls.filter(c=>c.method==='PUT').length,1);
+  }finally{f.store.close();}
+});
+
+for(const [field,value] of Object.entries({contactId:'other',entryDate:'2026-02-02',currencyId:'EUR',paymentTermsMode:'net',dueDate:'2026-03-01',amount:200,newFinancialField:'changed'})){
+  test(`invoice snapshot still rejects real drift: ${field}`,async()=>{
+    const f=fixture();
+    try{
+      const created=await f.engine.prepare(sales,'Synthetic draft');await f.engine.execute(created.id,created.hash);
+      const plan=await f.engine.prepare({kind:'update_draft_invoice',id:'invoices-1',paymentTermsDays:7,
+        expectedNetAmount:100,expectedTaxAmount:25,expectedTotalAmount:125},'Net seven days');
+      f.records.invoices['invoices-1'][field]=value;
+      await assert.rejects(f.engine.execute(plan.id,plan.hash),/changed/);
+      assert.equal(f.calls.filter(c=>c.method==='PUT').length,0);
+    }finally{f.store.close();}
+  });
+}
+
+
+for(const [entryDate,days,dueDate] of [['2028-02-28',1,'2028-02-29'],['2026-01-01',-1,'2025-12-31'],['2026-12-31',0,'2026-12-31']] as const){
+  test(`net terms calendar arithmetic: ${entryDate} plus ${days}`,async()=>{
+    const f=fixture();
+    try{
+      const created=await f.engine.prepare({...sales,entryDate},'Synthetic calendar case');await f.engine.execute(created.id,created.hash);
+      const plan=await f.engine.prepare({kind:'update_draft_invoice',id:'invoices-1',paymentTermsDays:days,
+        expectedNetAmount:100,expectedTaxAmount:25,expectedTotalAmount:125},'Calendar terms');
+      assert.equal((await f.engine.execute(plan.id,plan.hash)).result.dueDate,dueDate);
+    }finally{f.store.close();}
+  });
+}
+
+
+test('invalid invoice date rejects net terms during preparation without writing',async()=>{
+  const f=fixture();
+  try{
+    const created=await f.engine.prepare(sales,'Synthetic draft');await f.engine.execute(created.id,created.hash);
+    f.records.invoices['invoices-1'].entryDate='2026-02-30';
+    await assert.rejects(f.engine.prepare({kind:'update_draft_invoice',id:'invoices-1',paymentTermsDays:7,
+      expectedNetAmount:100,expectedTaxAmount:25,expectedTotalAmount:125},'Invalid date'),/Invalid invoice entry date/);
+    assert.equal(f.calls.filter(c=>c.method==='PUT').length,0);
   }finally{f.store.close();}
 });

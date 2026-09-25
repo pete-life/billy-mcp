@@ -41,3 +41,12 @@ Reports consume all pages and reapply date/state filters locally. They use base-
 The primary contract is the [Billy API reference](https://www.billy.dk/api/), checked 2026-09-23. Supplier credit-note fields are documented there, while the `creditNote` bill type additionally appears in a [published Billy integration schema](https://github.com/CloudElementsOpenLabs/elements/blob/9327e3d1341064df28795437d9b83075d2f276e3/billyaccounting/swagger-pretty.json). That older integration schema is supporting evidence, not a live acceptance result.
 
 The new sales, credit-note, partial-FX, fee, approval and batch paths have synthetic contract/integration tests. No live financial write or email was made while implementing this version. Existing live acceptance evidence applies only to the flows listed in [live acceptance](live-acceptance.md). A first live use of an additional flow should be a separately authorized, independently verified acceptance case.
+
+
+### Draft payment terms and snapshot stability
+
+`update_draft_invoice.paymentTermsDays` means net calendar days from the existing invoice date. The writer sets `paymentTermsMode:net` together with the day count and checks the returned due date, totals, draft state and unchanged lines. It does not approve or send the invoice. A wrong post-write due date is an unknown outcome, never an automatic retry.
+
+Invoice snapshots exclude only the top-level `downloadUrl`, which Billy can regenerate on every read. All other fields remain covered by the comparison, including unknown fields. Old unexecuted/rejected plans containing the link need an explicit refresh and review before execution; do not alter completed or unknown plans. For repeated pre-write drift rejection, inspect and refresh once, then return the unresolved case for investigation instead of looping.
+
+Net-term updates are fixture-tested; deployment-specific live acceptance must separately confirm that Billy recalculates dueDate when changing from date to net. Read the private deployment profile for that evidence.

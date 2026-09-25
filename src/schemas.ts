@@ -36,7 +36,7 @@ const salesInvoice=z.strictObject({kind:z.literal('create_sales_invoice'),contac
   lines:z.array(salesLine).min(1).max(100),...salesTotals,contactMessage:z.string().max(2000).optional()})
   .refine(v=>Math.round(v.expectedNetAmount*100)+Math.round(v.expectedTaxAmount*100)===Math.round(v.expectedTotalAmount*100),'Expected net plus VAT must equal gross');
 const draftInvoice=z.strictObject({kind:z.literal('update_draft_invoice'),id:identifier,contactMessage:z.string().max(2000).optional(),
-  taxMode:z.enum(['incl','excl']).optional(),paymentTermsDays:z.number().int().min(-365).max(3650).optional(),...salesTotals})
+  taxMode:z.enum(['incl','excl']).optional(),paymentTermsDays:z.number().int().min(-365).max(3650).describe('Net days from invoice entryDate; sets paymentTermsMode to net and verifies the computed dueDate').optional(),...salesTotals})
   .refine(v=>v.contactMessage!==undefined||v.taxMode!==undefined||v.paymentTermsDays!==undefined,'Specify a documented mutable invoice field')
   .refine(v=>Math.round(v.expectedNetAmount*100)+Math.round(v.expectedTaxAmount*100)===Math.round(v.expectedTotalAmount*100),'Expected net plus VAT must equal gross');
 const sendInvoice=z.strictObject({kind:z.literal('send_invoice'),id:identifier,contactPersonId:identifier,recipientEmail:z.email(),emailSubject:z.string().trim().min(1).max(500),emailBody:z.string().trim().min(1).max(10000)});

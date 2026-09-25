@@ -4,6 +4,19 @@ import {operation, type Operation} from './schemas.js';
 import type {Config} from './config.js';
 type BatchLease={batchId:string;nonce:string};
 
+// Only the invoice download link is known to rotate on every API read.
+// Keep all other fields (including future financial fields) in drift checks.
+function snapshotRecord(resource:Resource,record:RecordData):RecordData {
+  if(resource!=='invoices')return record;
+  const {downloadUrl,...stable}=record;return stable;
+}
+function netDueDate(entryDate:unknown,days:number):string {
+  if(typeof entryDate!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(entryDate))throw new Error('Invoice entry date is required for net terms');
+  const date=new Date(`${entryDate}T00:00:00Z`);
+  if(!Number.isFinite(date.getTime())||date.toISOString().slice(0,10)!==entryDate)throw new Error('Invalid invoice entry date for net terms');
+  date.setUTCDate(date.getUTCDate()+days);return date.toISOString().slice(0,10);
+}
+
 const cents=(v:number)=>Math.round(v*100);
 const exactCent=(v:number)=>Number.isFinite(v)&&Math.abs(v*100-Math.round(v*100))<0.000001;
 const normalize=(v:unknown)=>String(v??'').trim().toLowerCase().replace(/\s+/g,' ');
@@ -148,7 +161,7 @@ export class Engine {
     const organization=await this.client.verifyOrganization();
     const snapshots:{resource:Resource;id:string;hash:string;record:RecordData}[]=[];
     const get=async(resource:Resource,id:string,include?:string)=>{
-      const record=await this.client.get(resource,id,include);
+      const record=snapshotRecord(resource,await this.client.get(resource,id,include));
       snapshots.push({resource,id,hash:digest(record),record});return record;
     };
     const account=async(recordId:string)=>{const a=await get('accounts',recordId);if(a.isArchived)throw new Error('Archived account');return a;};
@@ -199,6 +212,7 @@ export class Engine {
       case 'update_draft_invoice': {
         const invoice=await get('invoices',op.id,'invoice.lines:embed');
         if(invoice.state!=='draft'||invoice.type!=='invoice'||!Array.isArray(invoice.lines)||!invoice.lines.length)throw new Error('Only an ordinary draft invoice with embedded lines can be edited');
+        if(op.paymentTermsDays!==undefined)netDueDate(invoice.entryDate,op.paymentTermsDays);
         break;
       }
       case 'send_invoice': {
@@ -507,7 +521,9 @@ export class Engine {
           const {kind,id,expectedNetAmount,expectedTaxAmount,expectedTotalAmount,...patch}=op;
           const reviewed=snapshots.find(snapshot=>snapshot.resource==='invoices'&&snapshot.id===id)?.record;
           if(!reviewed)throw new Error('Reviewed draft invoice snapshot is missing');
-          const invoice=await verify('invoices',await write('invoices',patch,id),{state:'draft',...patch});
+          const terms=op.paymentTermsDays===undefined?{}:{paymentTermsMode:'net'};
+          const expectedTerms=op.paymentTermsDays===undefined?{}:{...terms,dueDate:netDueDate(reviewed.entryDate,op.paymentTermsDays)};
+          const invoice=await verify('invoices',await write('invoices',{...patch,...terms},id),{state:'draft',...patch,...expectedTerms});
           if(invoice.type!=='invoice')throw new Error('Updated record has an unexpected invoice type');
           if(digest(immutableInvoiceLines(invoice))!==digest(immutableInvoiceLines(reviewed)))throw new Error('Draft invoice read-back changed immutable lines');
           verifyInvoice(invoice,op);result=invoice;break;
@@ -570,7 +586,7 @@ export class Engine {
           const {kind,subjectReference,bankLineId,subjectAmount,subjectCurrencyId,...payload}=op;
           const ref=subject(subjectReference),before=await this.client.get(ref.resource,ref.id,subjectInclude(ref.resource));
           const reviewed=snapshots.find(snapshot=>snapshot.resource===ref.resource&&snapshot.id===ref.id);
-          if(!reviewed||digest(before)!==reviewed.hash)throw new Error('Payment subject changed since the reviewed snapshot; no payment sent');
+          if(!reviewed||digest(snapshotRecord(ref.resource,before))!==reviewed.hash)throw new Error('Payment subject changed since the reviewed snapshot; no payment sent');
           const response=await write('bankPayments',{...payload,associations:[{subjectReference}]});
           const payment=await verify('bankPayments',response,{cashAmount:op.cashAmount,cashSide:op.cashSide,cashAccountId:op.cashAccountId});
           const paymentRead=await this.client.get('bankPayments',payment.id,'bankPayment.associations:embed');
