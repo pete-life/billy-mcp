@@ -1,9 +1,9 @@
 # Install Billy MCP locally
 
-Billy MCP requires Node.js 22.13 or newer. It runs as a local MCP stdio process. The npm package name is `@pete-life/billy-mcp`; the unscoped `billy-mcp` name belongs to another project. Version 0.2.1 is available as a GitHub release tarball. The npm registry package is not yet published; use the tarball command below or the repository build instructions in [README](../README.md).
+Billy MCP requires Node.js 22.13 or newer. It runs as a local MCP stdio process. The npm package name is `@pete-life/billy-mcp`; the unscoped `billy-mcp` name belongs to another project. Version 0.2.1 is available as a GitHub release tarball. The same package is published on npm; use the registry command below, the release tarball, or the repository build instructions in [README](../README.md).
 
 ```sh
-npm install -g https://github.com/pete-life/billy-mcp/releases/download/v0.2.1/pete-life-billy-mcp-0.2.1.tgz
+npm install -g @pete-life/billy-mcp@0.2.1
 billy-mcp --help
 billy-mcp setup
 billy-mcp doctor
@@ -28,7 +28,7 @@ Configure a client that supports **local stdio MCP servers** with the example be
 }
 ```
 
-The example assumes the tarball was installed globally. If your desktop client cannot find `billy-mcp` or Node 22.13+, use absolute executable paths supplied by your local Node installation. The generated `client-config` uses a version-pinned npm registry command; use the installed binary until registry publication. Starting `billy-mcp` with no subcommand uses stdout only for MCP protocol messages. Setup, diagnostics, and skill installation are separate terminal commands.
+The example assumes the package was installed globally. If your desktop client cannot find `billy-mcp` or Node 22.13+, use absolute executable paths supplied by your local Node installation. The generated `client-config` alternatively uses a version-pinned npm registry command. Starting `billy-mcp` with no subcommand uses stdout only for MCP protocol messages. Setup, diagnostics, and skill installation are separate terminal commands.
 
 The server's `bookkeeping-period` prompt includes the bundled skill, so a separate skill installation is optional. For a skill-aware client, install a copy explicitly:
 
