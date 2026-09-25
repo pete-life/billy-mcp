@@ -4,7 +4,7 @@ A local MCP server for Billy bookkeeping: complete accounting reads, receipt col
 
 ## Run
 
-Version 0.2.0 is a release candidate. The scoped npm package and `npx` entry point are prepared, but the package has not yet been published. Use the repository build below for now; see [installation and agent setup](docs/installation.md) for package commands and a reusable installation prompt.
+Version 0.2.1 is distributed as an installable tarball on [GitHub Releases](https://github.com/pete-life/billy-mcp/releases/tag/v0.2.1). The scoped npm registry package is not yet published. Use the release tarball or the repository build below; see [installation and agent setup](docs/installation.md).
 
 Requires Node.js 22.13+ (built-in SQLite).
 

@@ -1,6 +1,6 @@
 {
   "name": "@pete-life/billy-mcp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "bin": {
     "billy-mcp": "dist/cli.js"

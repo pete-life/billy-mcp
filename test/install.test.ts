@@ -29,7 +29,7 @@ test('published tarball shape and fresh local stdio install work without credent
     assert.match(help.stdout, /local MCP stdio server/);
     const config = run('client-config');
     assert.equal(config.status, 0);
-    assert.deepEqual(JSON.parse(config.stdout).mcpServers.billy.args, ['--yes', '@pete-life/billy-mcp@0.2.0']);
+    assert.deepEqual(JSON.parse(config.stdout).mcpServers.billy.args, ['--yes', `@pete-life/billy-mcp@${JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version}`]);
     assert.ok(!config.stdout.includes('BILLY_ACCESS_TOKEN'));
     const setup = run('setup');
     assert.equal(setup.status, 1);

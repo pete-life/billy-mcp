@@ -58,3 +58,12 @@ An evidenced fee uses feeAmount, feeAccountId and subjectAmount. Verify the fee 
 - `billy_outstanding({})` reports current unpaid approved bills/invoices and separate credit notes, grouped by original currency.
 
 Use returned scope and completeness fields. Reports use current void state; they cannot reconstruct a historical snapshot. Never sum different original currencies. Missing FX base amounts are an explicit exception, not zero. None of these tools files or settles VAT.
+
+
+### Draft payment terms and snapshot stability
+
+`update_draft_invoice.paymentTermsDays` means net calendar days from the existing invoice date. The writer sets `paymentTermsMode:net` together with the day count and checks the returned due date, totals, draft state and unchanged lines. It does not approve or send the invoice. A wrong post-write due date is an unknown outcome, never an automatic retry.
+
+Invoice snapshots exclude only the top-level `downloadUrl`, which Billy can regenerate on every read. All other fields remain covered by the comparison, including unknown fields. Old unexecuted/rejected plans containing the link need an explicit refresh and review before execution; do not alter completed or unknown plans. For repeated pre-write drift rejection, inspect and refresh once, then return the unresolved case for investigation instead of looping.
+
+Net-term updates have fixture coverage and a live-verified date-to-net update with due-date readback. See the release verification scope and private deployment profile for applicable evidence; this does not validate invoice sending.

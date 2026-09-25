@@ -19,4 +19,9 @@ For a new deployment, first verify company identity and read-only records. Enabl
 
 On 2026-09-23, all four new reports (trial balance, profit/loss, period expenses and current outstanding documents) completed against a connected Billy company through a GET-only transport. The full trial balance balanced. No private values or record IDs are included here. Synthetic tests separately cover ignored filters, pagination, credit-note separation and missing FX base amounts.
 
-The newly added sales draft/send, customer/supplier credit-note, partial FX and explicit-fee paths remain fixture tested. MCP form acceptance/decline and the dependency-aware batch flow have synthetic integration tests. Those tests are not live financial acceptance. The packaged tarball is also installed in a fresh temporary directory and initialized through real MCP stdio without credentials.
+Customer/supplier credit notes, invoice sending, partial FX and explicit-fee paths remain fixture tested. MCP form acceptance/decline and the dependency-aware batch flow have synthetic integration tests. Those tests are not live financial acceptance. The packaged tarball is also installed in a fresh temporary directory and initialized through real MCP stdio without credentials.
+
+
+## Version 0.2.1 evidence
+
+A customer creation and domestic sales draft were verified through the live API, followed by a net-days header update on that existing draft. Readback confirmed the requested day count, due date, unchanged lines/totals and draft/unsent state. No approval or sending was performed. Read-only comparison isolated a rotating top-level invoice downloadUrl; excluding that link stabilized snapshots while keeping other fields checked. The same flow has synthetic regression coverage for real drift and unknown post-write outcomes. Private identity and record evidence remain outside the package.
